@@ -34,43 +34,51 @@ jobs:
           pip install feedparser requests scikit-learn urllib3
           sudo apt-get update && sudo apt-get install -y rclone
 
-      - name: Configurar Rclone para Google Drive
+      - name: Configurar Rclone para as Pastas do Drive
         env:
           GDRIVE_SA_KEY: ${{ secrets.GDRIVE_SA_KEY }}
-          GDRIVE_FOLDER_ID: ${{ secrets.GDRIVE_FOLDER_ID }}
+          ID_CONFIG: ${{ secrets.GDRIVE_CONFIG_FOLDER_ID }}
+          ID_DADOS: ${{ secrets.GDRIVE_DADOS_BRUTOS_FOLDER_ID }}
         run: |
           echo "$GDRIVE_SA_KEY" > /tmp/gdrive_sa.json
-          CLEAN_ID=$(echo "$GDRIVE_FOLDER_ID" | grep -oE '[a-zA-Z0-9_-]{25,}' | head -n 1)
-          if [ -z "$CLEAN_ID" ]; then CLEAN_ID="$GDRIVE_FOLDER_ID"; fi
           mkdir -p ~/.config/rclone
           cat <<EOF > ~/.config/rclone/rclone.conf
-          [gdrive]
+          [gdrive_config]
           type = drive
           scope = drive
           service_account_file = /tmp/gdrive_sa.json
-          root_folder_id = $CLEAN_ID
+          root_folder_id = $ID_CONFIG
+          include_shared_with_me = true
+
+          [gdrive_dados]
+          type = drive
+          scope = drive
+          service_account_file = /tmp/gdrive_sa.json
+          root_folder_id = $ID_DADOS
           include_shared_with_me = true
           EOF
 
-      - name: Baixar Configurações do Drive
+      - name: Baixar Arquivos de Configuração
         run: |
           mkdir -p configs_drive
-          rclone copy gdrive:config/ configs_drive/
+          echo ">> Baixando arquivos de configuração via ID direto..."
+          rclone copy gdrive_config: configs_drive/
+          
           TOTAL_CFG=$(find configs_drive/ -name "config_*.py" | wc -l)
           if [ "$TOTAL_CFG" -eq 0 ]; then
-            echo "ERRO: Nenhum 'config_*.py' encontrado em gdrive:config/."
+            echo "ERRO: Nenhum arquivo config_*.py encontrado na pasta vinculada ao GDRIVE_CONFIG_FOLDER_ID."
             exit 1
           fi
-          echo ">> $TOTAL_CFG configurações carregadas."
+          echo ">> $TOTAL_CFG configuração(ões) carregada(s) com sucesso."
 
       - name: Executar Descoberta Histórica
         run: |
           python coletor_historico.py --meses_totais ${{ inputs.meses_totais }} --pasta_saida dados_novos_local --pasta_configs configs_drive
 
-      - name: Salvar Novos Lotes em dados_brutos/ (Com trava de sobreposição)
+      - name: Salvar Novos Lotes no Google Drive (Com trava de sobreposição)
         run: |
-          echo ">> Enviando apenas lotes novos para dados_brutos/..."
-          rclone copy dados_novos_local/ gdrive:dados_brutos/ --ignore-existing
+          echo ">> Enviando novos lotes para a pasta de dados brutos..."
+          rclone copy dados_novos_local/ gdrive_dados: --ignore-existing
           rm -f /tmp/gdrive_sa.json
 
   executar_extracao:
@@ -100,44 +108,41 @@ jobs:
           playwright install-deps chromium
           sudo apt-get update && sudo apt-get install -y rclone
 
-      - name: Configurar Rclone para Google Drive
+      - name: Configurar Rclone para Dados Brutos
         env:
           GDRIVE_SA_KEY: ${{ secrets.GDRIVE_SA_KEY }}
-          GDRIVE_FOLDER_ID: ${{ secrets.GDRIVE_FOLDER_ID }}
+          ID_DADOS: ${{ secrets.GDRIVE_DADOS_BRUTOS_FOLDER_ID }}
         run: |
           echo "$GDRIVE_SA_KEY" > /tmp/gdrive_sa.json
-          CLEAN_ID=$(echo "$GDRIVE_FOLDER_ID" | grep -oE '[a-zA-Z0-9_-]{25,}' | head -n 1)
-          if [ -z "$CLEAN_ID" ]; then CLEAN_ID="$GDRIVE_FOLDER_ID"; fi
           mkdir -p ~/.config/rclone
           cat <<EOF > ~/.config/rclone/rclone.conf
-          [gdrive]
+          [gdrive_dados]
           type = drive
           scope = drive
           service_account_file = /tmp/gdrive_sa.json
-          root_folder_id = $CLEAN_ID
+          root_folder_id = $ID_DADOS
           include_shared_with_me = true
           EOF
 
-      - name: Baixar Lote Específico do Runner de dados_brutos/
+      - name: Baixar Lote Específico do Runner
         run: |
           set -e
           mkdir -p dados_locais
-          rclone lsf gdrive:dados_brutos/ --include "noticias_raw_*.json" > /tmp/todos_arquivos.txt || true
+          rclone lsf gdrive_dados: --include "noticias_raw_*.json" > /tmp/todos_arquivos.txt || true
           sort /tmp/todos_arquivos.txt -o /tmp/todos_arquivos.txt
           TOTAL=$(wc -l < /tmp/todos_arquivos.txt)
-          echo ">> Total de arquivos identificados em dados_brutos/: $TOTAL"
+          echo ">> Total de arquivos na pasta de dados brutos: $TOTAL"
 
           if [ "$TOTAL" -eq 0 ]; then
-            echo "Nenhum arquivo localizado em dados_brutos/."
+            echo "Nenhum arquivo localizado para processamento."
             exit 0
           fi
 
-          # Divide os arquivos igualmente entre os 10 runners
           split -d -n l/10 /tmp/todos_arquivos.txt /tmp/grupo_
           ARQ_SPLIT="/tmp/grupo_0${{ matrix.grupo }}"
           if [ -f "$ARQ_SPLIT" ]; then
             for f in $(cat "$ARQ_SPLIT"); do
-              rclone copy "gdrive:dados_brutos/$f" dados_locais/
+              rclone copy "gdrive_dados:$f" dados_locais/
             done
           fi
 
@@ -154,13 +159,13 @@ jobs:
           fi
           python extrator_lote.py --arquivos $ARQUIVOS_LOCAIS --runner_id ${{ matrix.grupo }} --meta_sucesso ${{ inputs.meta_sucesso }}
 
-      - name: Atualizar Arquivos Concluídos em dados_brutos/
+      - name: Atualizar Arquivos Concluídos no Google Drive
         if: always()
         run: |
           if [ -d "dados_locais" ]; then
             for f in dados_locais/noticias_raw_*.json; do
               if [ -f "$f" ]; then
-                rclone copyto "$f" "gdrive:dados_brutos/$(basename "$f")"
+                rclone copyto "$f" "gdrive_dados:$(basename "$f")"
               fi
             done
           fi
