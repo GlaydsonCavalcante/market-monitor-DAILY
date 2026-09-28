@@ -706,14 +706,12 @@ def processar_arquivo(caminho_arquivo: str, runner_id: int = 0) -> dict:
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument(
-        "--arquivos", nargs="+", required=True, help="Arquivos para processar"
-    )
-    parser.add_argument(
-        "--runner_id", type=int, default=0, help="Identificador do Runner"
-    )
+    parser.add_argument("--arquivos", nargs="+", required=True, help="Arquivos para processar")
+    parser.add_argument("--runner_id", type=int, default=0, help="Identificador do Runner")
+    parser.add_argument("--meta_sucesso", type=float, default=70.0, help="Meta desejável de sucesso global")
     args = parser.parse_args()
 
+    META_SUCESSO_GLOBAL = args.meta_sucesso
     t_inicio_bloco = time.perf_counter()
     auditoria_bloco = []
 
