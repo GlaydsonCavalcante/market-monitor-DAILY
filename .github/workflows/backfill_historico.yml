@@ -1,0 +1,159 @@
+name: Market Monitor Backfill (Historico Unificado)
+
+on:
+  workflow_dispatch:
+    inputs:
+      meses_totais:
+        description: 'Quantidade de meses retroativos para pesquisar'
+        required: true
+        default: '1'
+        type: string
+      meta_sucesso:
+        description: 'Meta desejável de extração (%)'
+        required: true
+        default: '70.0'
+        type: string
+
+jobs:
+  coletar_historico:
+    name: "Fase A: Descoberta e Sharding RSS"
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout do Repositorio
+        uses: actions/checkout@v4
+
+      - name: Configurar Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Instalar Dependencias da Coleta
+        run: |
+          pip install --upgrade pip
+          pip install feedparser requests scikit-learn urllib3
+          sudo apt-get update && sudo apt-get install -y rclone
+
+      - name: Configurar Rclone para Google Drive
+        env:
+          GDRIVE_SA_KEY: ${{ secrets.GDRIVE_SA_KEY }}
+          GDRIVE_FOLDER_ID: ${{ secrets.GDRIVE_FOLDER_ID }}
+        run: |
+          echo "$GDRIVE_SA_KEY" > /tmp/gdrive_sa.json
+          CLEAN_ID=$(echo "$GDRIVE_FOLDER_ID" | grep -oE '[a-zA-Z0-9_-]{25,}' | head -n 1)
+          if [ -z "$CLEAN_ID" ]; then CLEAN_ID="$GDRIVE_FOLDER_ID"; fi
+          mkdir -p ~/.config/rclone
+          cat <<EOF > ~/.config/rclone/rclone.conf
+          [gdrive]
+          type = drive
+          scope = drive
+          service_account_file = /tmp/gdrive_sa.json
+          root_folder_id = $CLEAN_ID
+          include_shared_with_me = true
+          EOF
+
+      - name: Executar Descoberta Histórica
+        run: |
+          python coletor_historico.py --meses_totais ${{ inputs.meses_totais }} --pasta_saida dados_fila_local --pasta_configs configs
+
+      - name: Sincronizar Shards na Pasta dados_fila/ do Google Drive
+        run: |
+          echo ">> Enviando novos lotes para dados_fila/ no Google Drive..."
+          rclone copy dados_fila_local/ gdrive:dados_fila/ --ignore-existing
+          rm -f /tmp/gdrive_sa.json
+
+  executar_extracao:
+    name: "Fase B: Extracao Matricial"
+    needs: coletar_historico  # Bloqueio estrito: só roda se a Fase A finalizar
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        grupo: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
+
+    steps:
+      - name: Checkout do Repositorio
+        uses: actions/checkout@v4
+
+      - name: Configurar Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Instalar Dependencias e Playwright
+        run: |
+          pip install --upgrade pip
+          pip install -r requirements.txt
+          playwright install chromium
+          playwright install-deps chromium
+          sudo apt-get update && sudo apt-get install -y rclone
+
+      - name: Configurar Rclone para Google Drive
+        env:
+          GDRIVE_SA_KEY: ${{ secrets.GDRIVE_SA_KEY }}
+          GDRIVE_FOLDER_ID: ${{ secrets.GDRIVE_FOLDER_ID }}
+        run: |
+          echo "$GDRIVE_SA_KEY" > /tmp/gdrive_sa.json
+          CLEAN_ID=$(echo "$GDRIVE_FOLDER_ID" | grep -oE '[a-zA-Z0-9_-]{25,}' | head -n 1)
+          if [ -z "$CLEAN_ID" ]; then CLEAN_ID="$GDRIVE_FOLDER_ID"; fi
+          mkdir -p ~/.config/rclone
+          cat <<EOF > ~/.config/rclone/rclone.conf
+          [gdrive]
+          type = drive
+          scope = drive
+          service_account_file = /tmp/gdrive_sa.json
+          root_folder_id = $CLEAN_ID
+          include_shared_with_me = true
+          EOF
+
+      - name: Baixar Lote Específico do Runner da pasta dados_fila/
+        run: |
+          set -e
+          mkdir -p dados_locais
+          rclone lsf gdrive:dados_fila/ --include "noticias_raw_*.json" > /tmp/todos_arquivos.txt || true
+          sort /tmp/todos_arquivos.txt -o /tmp/todos_arquivos.txt
+          TOTAL=$(wc -l < /tmp/todos_arquivos.txt)
+          echo ">> Total de arquivos na fila: $TOTAL"
+
+          if [ "$TOTAL" -eq 0 ]; then
+            echo "Nenhum arquivo pendente em dados_fila/. Encerrando runner."
+            exit 0
+          fi
+
+          split -d -n l/10 /tmp/todos_arquivos.txt /tmp/grupo_
+          ARQ_SPLIT="/tmp/grupo_0${{ matrix.grupo }}"
+          if [ -f "$ARQ_SPLIT" ]; then
+            for f in $(cat "$ARQ_SPLIT"); do
+              rclone copy "gdrive:dados_fila/$f" dados_locais/
+            done
+          fi
+
+      - name: Executar Extracao
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: |
+          set -e
+          ARQUIVOS_LOCAIS=$(find dados_locais/ -name "noticias_raw_*.json" | tr '\n' ' ')
+          if [ -z "$ARQUIVOS_LOCAIS" ]; then
+            echo "Nenhum arquivo alocado para este runner."
+            exit 0
+          fi
+          python extrator_lote.py --arquivos $ARQUIVOS_LOCAIS --runner_id ${{ matrix.grupo }} --meta_sucesso ${{ inputs.meta_sucesso }}
+
+      - name: Promover Arquivos Concluídos para dados_brutos/ e Limpar Fila
+        if: always()
+        run: |
+          if [ -d "dados_locais" ]; then
+            for f in dados_locais/noticias_raw_*.json; do
+              if [ -f "$f" ]; then
+                NOME=$(basename "$f")
+                # Copia para dados_brutos (onde a Etapa C lê)
+                rclone copyto "$f" "gdrive:dados_brutos/$NOME"
+                # Remove de dados_fila para não reprocessar
+                rclone delete "gdrive:dados_fila/$NOME" || true
+              fi
+            done
+          fi
+          rm -f /tmp/gdrive_sa.json
