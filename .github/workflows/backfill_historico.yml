@@ -28,7 +28,7 @@ jobs:
           python-version: '3.11'
           cache: 'pip'
 
-      - name: Instalar Dependencias da Coleta
+      - name: Instalar Dependencias
         run: |
           pip install --upgrade pip
           pip install feedparser requests scikit-learn urllib3
@@ -52,38 +52,30 @@ jobs:
           include_shared_with_me = true
           EOF
 
-      - name: Baixar Configurações do Google Drive
+      - name: Baixar Configurações do Drive
         run: |
-          set -e
           mkdir -p configs_drive
-          echo ">> Baixando arquivos de configuração do Google Drive..."
-          
-          # Tenta sincronizar a pasta 'config/' ou 'configs/' do Drive
-          rclone copy gdrive:config/ configs_drive/ || rclone copy gdrive:configs/ configs_drive/
-
-          # Validação estrita: quebra o workflow se não houver configs válidos
+          rclone copy gdrive:config/ configs_drive/
           TOTAL_CFG=$(find configs_drive/ -name "config_*.py" | wc -l)
           if [ "$TOTAL_CFG" -eq 0 ]; then
-            echo "ERRO FATAL: Nenhum arquivo 'config_*.py' localizado em 'gdrive:config/' ou 'gdrive:configs/'."
-            echo "Estrutura visível na raiz do ID configurado:"
-            rclone lsf gdrive:
+            echo "ERRO: Nenhum 'config_*.py' encontrado em gdrive:config/."
             exit 1
           fi
-          echo ">> $TOTAL_CFG arquivo(s) de configuração carregado(s) com sucesso."
+          echo ">> $TOTAL_CFG configurações carregadas."
 
       - name: Executar Descoberta Histórica
         run: |
-          python coletor_historico.py --meses_totais ${{ inputs.meses_totais }} --pasta_saida dados_fila_local --pasta_configs configs_drive
-          
-      - name: Sincronizar Shards na Pasta dados_fila/ do Google Drive
+          python coletor_historico.py --meses_totais ${{ inputs.meses_totais }} --pasta_saida dados_novos_local --pasta_configs configs_drive
+
+      - name: Salvar Novos Lotes em dados_brutos/ (Com trava de sobreposição)
         run: |
-          echo ">> Enviando novos lotes para dados_fila/ no Google Drive..."
-          rclone copy dados_fila_local/ gdrive:dados_fila/ --ignore-existing
+          echo ">> Enviando apenas lotes novos para dados_brutos/..."
+          rclone copy dados_novos_local/ gdrive:dados_brutos/ --ignore-existing
           rm -f /tmp/gdrive_sa.json
 
   executar_extracao:
     name: "Fase B: Extracao Matricial"
-    needs: coletar_historico  # Bloqueio estrito: só roda se a Fase A finalizar
+    needs: coletar_historico
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -126,25 +118,26 @@ jobs:
           include_shared_with_me = true
           EOF
 
-      - name: Baixar Lote Específico do Runner da pasta dados_fila/
+      - name: Baixar Lote Específico do Runner de dados_brutos/
         run: |
           set -e
           mkdir -p dados_locais
-          rclone lsf gdrive:dados_fila/ --include "noticias_raw_*.json" > /tmp/todos_arquivos.txt || true
+          rclone lsf gdrive:dados_brutos/ --include "noticias_raw_*.json" > /tmp/todos_arquivos.txt || true
           sort /tmp/todos_arquivos.txt -o /tmp/todos_arquivos.txt
           TOTAL=$(wc -l < /tmp/todos_arquivos.txt)
-          echo ">> Total de arquivos na fila: $TOTAL"
+          echo ">> Total de arquivos identificados em dados_brutos/: $TOTAL"
 
           if [ "$TOTAL" -eq 0 ]; then
-            echo "Nenhum arquivo pendente em dados_fila/. Encerrando runner."
+            echo "Nenhum arquivo localizado em dados_brutos/."
             exit 0
           fi
 
+          # Divide os arquivos igualmente entre os 10 runners
           split -d -n l/10 /tmp/todos_arquivos.txt /tmp/grupo_
           ARQ_SPLIT="/tmp/grupo_0${{ matrix.grupo }}"
           if [ -f "$ARQ_SPLIT" ]; then
             for f in $(cat "$ARQ_SPLIT"); do
-              rclone copy "gdrive:dados_fila/$f" dados_locais/
+              rclone copy "gdrive:dados_brutos/$f" dados_locais/
             done
           fi
 
@@ -161,17 +154,13 @@ jobs:
           fi
           python extrator_lote.py --arquivos $ARQUIVOS_LOCAIS --runner_id ${{ matrix.grupo }} --meta_sucesso ${{ inputs.meta_sucesso }}
 
-      - name: Promover Arquivos Concluídos para dados_brutos/ e Limpar Fila
+      - name: Atualizar Arquivos Concluídos em dados_brutos/
         if: always()
         run: |
           if [ -d "dados_locais" ]; then
             for f in dados_locais/noticias_raw_*.json; do
               if [ -f "$f" ]; then
-                NOME=$(basename "$f")
-                # Copia para dados_brutos (onde a Etapa C lê)
-                rclone copyto "$f" "gdrive:dados_brutos/$NOME"
-                # Remove de dados_fila para não reprocessar
-                rclone delete "gdrive:dados_fila/$NOME" || true
+                rclone copyto "$f" "gdrive:dados_brutos/$(basename "$f")"
               fi
             done
           fi
