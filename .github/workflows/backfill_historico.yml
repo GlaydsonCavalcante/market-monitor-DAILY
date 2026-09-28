@@ -34,42 +34,59 @@ jobs:
           pip install feedparser requests scikit-learn urllib3
           sudo apt-get update && sudo apt-get install -y rclone
 
-      - name: Configurar Rclone para as Pastas do Drive
+      - name: Configurar Rclone e Limpar IDs
         env:
           GDRIVE_SA_KEY: ${{ secrets.GDRIVE_SA_KEY }}
-          ID_CONFIG: ${{ secrets.GDRIVE_CONFIG_FOLDER_ID }}
-          ID_DADOS: ${{ secrets.GDRIVE_DADOS_BRUTOS_FOLDER_ID }}
+          ID_CONFIG_RAW: ${{ secrets.GDRIVE_CONFIG_FOLDER_ID }}
+          ID_DADOS_RAW: ${{ secrets.GDRIVE_DADOS_BRUTOS_FOLDER_ID }}
         run: |
           echo "$GDRIVE_SA_KEY" > /tmp/gdrive_sa.json
+          
+          # Extrai o ID limpo (caso tenha sido colada a URL inteira)
+          CLEAN_CONFIG=$(echo "$ID_CONFIG_RAW" | grep -oE '[a-zA-Z0-9_-]{25,}' | head -n 1)
+          CLEAN_DADOS=$(echo "$ID_DADOS_RAW" | grep -oE '[a-zA-Z0-9_-]{25,}' | head -n 1)
+
+          if [ -z "$CLEAN_CONFIG" ]; then CLEAN_CONFIG="$ID_CONFIG_RAW"; fi
+          if [ -z "$CLEAN_DADOS" ]; then CLEAN_DADOS="$ID_DADOS_RAW"; fi
+
+          echo "ID_CONFIG_FINAL=$CLEAN_CONFIG" >> $GITHUB_ENV
+          echo "ID_DADOS_FINAL=$CLEAN_DADOS" >> $GITHUB_ENV
+
+          echo ">> E-mail da Conta de Servico que precisa de acesso:"
+          python3 -c "import json; print(json.load(open('/tmp/gdrive_sa.json'))['client_email'])"
+
           mkdir -p ~/.config/rclone
           cat <<EOF > ~/.config/rclone/rclone.conf
           [gdrive_config]
           type = drive
           scope = drive
           service_account_file = /tmp/gdrive_sa.json
-          root_folder_id = $ID_CONFIG
+          root_folder_id = $CLEAN_CONFIG
           include_shared_with_me = true
 
           [gdrive_dados]
           type = drive
           scope = drive
           service_account_file = /tmp/gdrive_sa.json
-          root_folder_id = $ID_DADOS
+          root_folder_id = $CLEAN_DADOS
           include_shared_with_me = true
           EOF
 
       - name: Baixar Arquivos de Configuração
         run: |
           mkdir -p configs_drive
-          echo ">> Baixando arquivos de configuração via ID direto..."
-          rclone copy gdrive_config: configs_drive/
+          echo ">> Listando o conteudo da pasta de configuracao..."
+          rclone lsf gdrive_config: || true
+          
+          rclone copy gdrive_config: configs_drive/ --retries 1
           
           TOTAL_CFG=$(find configs_drive/ -name "config_*.py" | wc -l)
           if [ "$TOTAL_CFG" -eq 0 ]; then
-            echo "ERRO: Nenhum arquivo config_*.py encontrado na pasta vinculada ao GDRIVE_CONFIG_FOLDER_ID."
+            echo "ERRO FATAL: Nenhum config_*.py encontrado."
+            echo "Verifique se a pasta 'config' foi compartilhada com o e-mail da Conta de Servico exibido acima."
             exit 1
           fi
-          echo ">> $TOTAL_CFG configuração(ões) carregada(s) com sucesso."
+          echo ">> $TOTAL_CFG arquivo(s) de configuracao carregado(s)."
 
       - name: Executar Descoberta Histórica
         run: |
@@ -111,16 +128,19 @@ jobs:
       - name: Configurar Rclone para Dados Brutos
         env:
           GDRIVE_SA_KEY: ${{ secrets.GDRIVE_SA_KEY }}
-          ID_DADOS: ${{ secrets.GDRIVE_DADOS_BRUTOS_FOLDER_ID }}
+          ID_DADOS_RAW: ${{ secrets.GDRIVE_DADOS_BRUTOS_FOLDER_ID }}
         run: |
           echo "$GDRIVE_SA_KEY" > /tmp/gdrive_sa.json
+          CLEAN_DADOS=$(echo "$ID_DADOS_RAW" | grep -oE '[a-zA-Z0-9_-]{25,}' | head -n 1)
+          if [ -z "$CLEAN_DADOS" ]; then CLEAN_DADOS="$ID_DADOS_RAW"; fi
+
           mkdir -p ~/.config/rclone
           cat <<EOF > ~/.config/rclone/rclone.conf
           [gdrive_dados]
           type = drive
           scope = drive
           service_account_file = /tmp/gdrive_sa.json
-          root_folder_id = $ID_DADOS
+          root_folder_id = $CLEAN_DADOS
           include_shared_with_me = true
           EOF
 
