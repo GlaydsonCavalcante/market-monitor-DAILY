@@ -52,10 +52,29 @@ jobs:
           include_shared_with_me = true
           EOF
 
+      - name: Baixar Configurações do Google Drive
+        run: |
+          set -e
+          mkdir -p configs_drive
+          echo ">> Baixando arquivos de configuração do Google Drive..."
+          
+          # Tenta sincronizar a pasta 'config/' ou 'configs/' do Drive
+          rclone copy gdrive:config/ configs_drive/ || rclone copy gdrive:configs/ configs_drive/
+
+          # Validação estrita: quebra o workflow se não houver configs válidos
+          TOTAL_CFG=$(find configs_drive/ -name "config_*.py" | wc -l)
+          if [ "$TOTAL_CFG" -eq 0 ]; then
+            echo "ERRO FATAL: Nenhum arquivo 'config_*.py' localizado em 'gdrive:config/' ou 'gdrive:configs/'."
+            echo "Estrutura visível na raiz do ID configurado:"
+            rclone lsf gdrive:
+            exit 1
+          fi
+          echo ">> $TOTAL_CFG arquivo(s) de configuração carregado(s) com sucesso."
+
       - name: Executar Descoberta Histórica
         run: |
-          python coletor_historico.py --meses_totais ${{ inputs.meses_totais }} --pasta_saida dados_fila_local --pasta_configs configs
-
+          python coletor_historico.py --meses_totais ${{ inputs.meses_totais }} --pasta_saida dados_fila_local --pasta_configs configs_drive
+          
       - name: Sincronizar Shards na Pasta dados_fila/ do Google Drive
         run: |
           echo ">> Enviando novos lotes para dados_fila/ no Google Drive..."
