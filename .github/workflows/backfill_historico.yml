@@ -1,13 +1,8 @@
-name: Market Monitor Backfill (Historico Unificado)
+name: Market Monitor - Fase B (Extracao Matricial)
 
 on:
   workflow_dispatch:
     inputs:
-      meses_totais:
-        description: 'Quantidade de meses retroativos para pesquisar'
-        required: true
-        default: '1'
-        type: string
       meta_sucesso:
         description: 'Meta desejável de extração (%)'
         required: true
@@ -15,114 +10,8 @@ on:
         type: string
 
 jobs:
-  coletar_historico:
-    name: "Fase A: Descoberta e Sharding RSS"
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout do Repositorio
-        uses: actions/checkout@v4
-
-      - name: Configurar Python 3.11
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-          cache: 'pip'
-
-      - name: Instalar Dependencias
-        run: |
-          pip install --upgrade pip
-          pip install feedparser requests scikit-learn urllib3
-          sudo apt-get update && sudo apt-get install -y rclone
-
-      - name: Configurar Rclone com Higienização Python
-        env:
-          CLIENT_ID: ${{ secrets.GDRIVE_CLIENT_ID }}
-          CLIENT_SECRET: ${{ secrets.GDRIVE_CLIENT_SECRET }}
-          REFRESH_TOKEN: ${{ secrets.GDRIVE_REFRESH_TOKEN }}
-          ID_CONFIG_RAW: ${{ secrets.GDRIVE_CONFIG_FOLDER_ID }}
-          ID_DADOS_RAW: ${{ secrets.GDRIVE_DADOS_BRUTOS_FOLDER_ID }}
-        run: |
-          python3 -c '
-          import os, json, re
-
-          def limpar_id(val):
-              m = re.search(r"[a-zA-Z0-9_-]{25,}", val or "")
-              return m.group(0) if m else (val or "").strip()
-
-          def extrair_token(val):
-              v = (val or "").strip()
-              if v.startswith("{"):
-                  try:
-                      return json.loads(v).get("refresh_token", v).strip()
-                  except Exception:
-                      pass
-              for linha in v.splitlines():
-                  l = linha.strip()
-                  if "1//" in l:
-                      return l[l.find("1//"):].strip()
-              linhas = [l for l in v.splitlines() if l.strip()]
-              return linhas[-1] if linhas else ""
-
-          client_id = (os.getenv("CLIENT_ID") or "").strip()
-          client_secret = (os.getenv("CLIENT_SECRET") or "").strip()
-          refresh_token = extrair_token(os.getenv("REFRESH_TOKEN"))
-          id_config = limpar_id(os.getenv("ID_CONFIG_RAW"))
-          id_dados = limpar_id(os.getenv("ID_DADOS_RAW"))
-
-          token_obj = json.dumps({
-              "access_token": "dummy",
-              "token_type": "Bearer",
-              "refresh_token": refresh_token,
-              "expiry": "2026-01-01T00:00:00Z"
-          })
-
-          conf_texto = f"""[gdrive_config]
-          type = drive
-          client_id = {client_id}
-          client_secret = {client_secret}
-          scope = drive
-          token = {token_obj}
-          root_folder_id = {id_config}
-
-          [gdrive_dados]
-          type = drive
-          client_id = {client_id}
-          client_secret = {client_secret}
-          scope = drive
-          token = {token_obj}
-          root_folder_id = {id_dados}
-          """
-
-          os.makedirs(os.path.expanduser("~/.config/rclone"), exist_ok=True)
-          with open(os.path.expanduser("~/.config/rclone/rclone.conf"), "w", encoding="utf-8") as f:
-              f.write(conf_texto.strip())
-
-          print(f">> Rclone configurado com sucesso.")
-          '
-
-      - name: Baixar Arquivos de Configuração
-        run: |
-          mkdir -p configs_drive
-          rclone copy gdrive_config: configs_drive/
-          TOTAL_CFG=$(find configs_drive/ -name "config_*.py" | wc -l)
-          if [ "$TOTAL_CFG" -eq 0 ]; then
-            echo "ERRO FATAL: Nenhum config_*.py encontrado."
-            exit 1
-          fi
-          echo ">> $TOTAL_CFG arquivo(s) de configuração carregado(s)."
-
-      - name: Executar Descoberta Histórica
-        run: |
-          python coletor_historico.py --meses_totais ${{ inputs.meses_totais }} --pasta_saida dados_novos_local --pasta_configs configs_drive
-
-      - name: Salvar Novos Lotes no Google Drive (Com Cota Pessoal)
-        run: |
-          echo ">> Enviando novos lotes com cota de usuário pessoal..."
-          rclone copy dados_novos_local/ gdrive_dados: --ignore-existing
-
   executar_extracao:
     name: "Fase B: Extracao Matricial"
-    needs: coletar_historico
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -147,59 +36,24 @@ jobs:
           playwright install-deps chromium
           sudo apt-get update && sudo apt-get install -y rclone
 
-      - name: Configurar Rclone para Dados Brutos (Higienização Python)
+      - name: Configurar Rclone para Dados Brutos
         env:
-          CLIENT_ID: ${{ secrets.GDRIVE_CLIENT_ID }}
-          CLIENT_SECRET: ${{ secrets.GDRIVE_CLIENT_SECRET }}
-          REFRESH_TOKEN: ${{ secrets.GDRIVE_REFRESH_TOKEN }}
+          GDRIVE_SA_KEY: ${{ secrets.GDRIVE_SA_KEY }}
           ID_DADOS_RAW: ${{ secrets.GDRIVE_DADOS_BRUTOS_FOLDER_ID }}
         run: |
-          python3 -c '
-          import os, json, re
+          echo "$GDRIVE_SA_KEY" > /tmp/gdrive_sa.json
+          CLEAN_DADOS=$(echo "$ID_DADOS_RAW" | grep -oE '[a-zA-Z0-9_-]{25,}' | head -n 1)
+          if [ -z "$CLEAN_DADOS" ]; then CLEAN_DADOS="$ID_DADOS_RAW"; fi
 
-          def limpar_id(val):
-              m = re.search(r"[a-zA-Z0-9_-]{25,}", val or "")
-              return m.group(0) if m else (val or "").strip()
-
-          def extrair_token(val):
-              v = (val or "").strip()
-              if v.startswith("{"):
-                  try:
-                      return json.loads(v).get("refresh_token", v).strip()
-                  except Exception:
-                      pass
-              for linha in v.splitlines():
-                  l = linha.strip()
-                  if "1//" in l:
-                      return l[l.find("1//"):].strip()
-              linhas = [l for l in v.splitlines() if l.strip()]
-              return linhas[-1] if linhas else ""
-
-          client_id = (os.getenv("CLIENT_ID") or "").strip()
-          client_secret = (os.getenv("CLIENT_SECRET") or "").strip()
-          refresh_token = extrair_token(os.getenv("REFRESH_TOKEN"))
-          id_dados = limpar_id(os.getenv("ID_DADOS_RAW"))
-
-          token_obj = json.dumps({
-              "access_token": "dummy",
-              "token_type": "Bearer",
-              "refresh_token": refresh_token,
-              "expiry": "2026-01-01T00:00:00Z"
-          })
-
-          conf_texto = f"""[gdrive_dados]
+          mkdir -p ~/.config/rclone
+          cat <<EOF > ~/.config/rclone/rclone.conf
+          [gdrive_dados]
           type = drive
-          client_id = {client_id}
-          client_secret = {client_secret}
           scope = drive
-          token = {token_obj}
-          root_folder_id = {id_dados}
-          """
-
-          os.makedirs(os.path.expanduser("~/.config/rclone"), exist_ok=True)
-          with open(os.path.expanduser("~/.config/rclone/rclone.conf"), "w", encoding="utf-8") as f:
-              f.write(conf_texto.strip())
-          '
+          service_account_file = /tmp/gdrive_sa.json
+          root_folder_id = $CLEAN_DADOS
+          include_shared_with_me = true
+          EOF
 
       - name: Baixar Lote Específico do Runner
         run: |
@@ -246,3 +100,4 @@ jobs:
               fi
             done
           fi
+          rm -f /tmp/gdrive_sa.json
