@@ -34,7 +34,7 @@ jobs:
           pip install feedparser requests scikit-learn urllib3
           sudo apt-get update && sudo apt-get install -y rclone
 
-      - name: Configurar Rclone com OAuth Pessoal
+      - name: Configurar Rclone com Higienização Python
         env:
           CLIENT_ID: ${{ secrets.GDRIVE_CLIENT_ID }}
           CLIENT_SECRET: ${{ secrets.GDRIVE_CLIENT_SECRET }}
@@ -42,31 +42,63 @@ jobs:
           ID_CONFIG_RAW: ${{ secrets.GDRIVE_CONFIG_FOLDER_ID }}
           ID_DADOS_RAW: ${{ secrets.GDRIVE_DADOS_BRUTOS_FOLDER_ID }}
         run: |
-          CLEAN_CONFIG=$(echo "$ID_CONFIG_RAW" | grep -oE '[a-zA-Z0-9_-]{25,}' | head -n 1)
-          CLEAN_DADOS=$(echo "$ID_DADOS_RAW" | grep -oE '[a-zA-Z0-9_-]{25,}' | head -n 1)
-          if [ -z "$CLEAN_CONFIG" ]; then CLEAN_CONFIG="$ID_CONFIG_RAW"; fi
-          if [ -z "$CLEAN_DADOS" ]; then CLEAN_DADOS="$ID_DADOS_RAW"; fi
+          python3 -c '
+          import os, json, re
 
-          JSON_TOKEN="{\"access_token\":\"dummy\",\"token_type\":\"Bearer\",\"refresh_token\":\"$REFRESH_TOKEN\",\"expiry\":\"2026-01-01T00:00:00Z\"}"
+          def limpar_id(val):
+              m = re.search(r"[a-zA-Z0-9_-]{25,}", val or "")
+              return m.group(0) if m else (val or "").strip()
 
-          mkdir -p ~/.config/rclone
-          cat <<EOF > ~/.config/rclone/rclone.conf
-          [gdrive_config]
+          def extrair_token(val):
+              v = (val or "").strip()
+              if v.startswith("{"):
+                  try:
+                      return json.loads(v).get("refresh_token", v).strip()
+                  except Exception:
+                      pass
+              for linha in v.splitlines():
+                  l = linha.strip()
+                  if "1//" in l:
+                      return l[l.find("1//"):].strip()
+              linhas = [l for l in v.splitlines() if l.strip()]
+              return linhas[-1] if linhas else ""
+
+          client_id = (os.getenv("CLIENT_ID") or "").strip()
+          client_secret = (os.getenv("CLIENT_SECRET") or "").strip()
+          refresh_token = extrair_token(os.getenv("REFRESH_TOKEN"))
+          id_config = limpar_id(os.getenv("ID_CONFIG_RAW"))
+          id_dados = limpar_id(os.getenv("ID_DADOS_RAW"))
+
+          token_obj = json.dumps({
+              "access_token": "dummy",
+              "token_type": "Bearer",
+              "refresh_token": refresh_token,
+              "expiry": "2026-01-01T00:00:00Z"
+          })
+
+          conf_texto = f"""[gdrive_config]
           type = drive
-          client_id = $CLIENT_ID
-          client_secret = $CLIENT_SECRET
+          client_id = {client_id}
+          client_secret = {client_secret}
           scope = drive
-          token = $JSON_TOKEN
-          root_folder_id = $CLEAN_CONFIG
+          token = {token_obj}
+          root_folder_id = {id_config}
 
           [gdrive_dados]
           type = drive
-          client_id = $CLIENT_ID
-          client_secret = $CLIENT_SECRET
+          client_id = {client_id}
+          client_secret = {client_secret}
           scope = drive
-          token = $JSON_TOKEN
-          root_folder_id = $CLEAN_DADOS
-          EOF
+          token = {token_obj}
+          root_folder_id = {id_dados}
+          """
+
+          os.makedirs(os.path.expanduser("~/.config/rclone"), exist_ok=True)
+          with open(os.path.expanduser("~/.config/rclone/rclone.conf"), "w", encoding="utf-8") as f:
+              f.write(conf_texto.strip())
+
+          print(f">> Rclone configurado com sucesso.")
+          '
 
       - name: Baixar Arquivos de Configuração
         run: |
@@ -115,28 +147,59 @@ jobs:
           playwright install-deps chromium
           sudo apt-get update && sudo apt-get install -y rclone
 
-      - name: Configurar Rclone para Dados Brutos (OAuth Pessoal)
+      - name: Configurar Rclone para Dados Brutos (Higienização Python)
         env:
           CLIENT_ID: ${{ secrets.GDRIVE_CLIENT_ID }}
           CLIENT_SECRET: ${{ secrets.GDRIVE_CLIENT_SECRET }}
           REFRESH_TOKEN: ${{ secrets.GDRIVE_REFRESH_TOKEN }}
           ID_DADOS_RAW: ${{ secrets.GDRIVE_DADOS_BRUTOS_FOLDER_ID }}
         run: |
-          CLEAN_DADOS=$(echo "$ID_DADOS_RAW" | grep -oE '[a-zA-Z0-9_-]{25,}' | head -n 1)
-          if [ -z "$CLEAN_DADOS" ]; then CLEAN_DADOS="$ID_DADOS_RAW"; fi
+          python3 -c '
+          import os, json, re
 
-          JSON_TOKEN="{\"access_token\":\"dummy\",\"token_type\":\"Bearer\",\"refresh_token\":\"$REFRESH_TOKEN\",\"expiry\":\"2026-01-01T00:00:00Z\"}"
+          def limpar_id(val):
+              m = re.search(r"[a-zA-Z0-9_-]{25,}", val or "")
+              return m.group(0) if m else (val or "").strip()
 
-          mkdir -p ~/.config/rclone
-          cat <<EOF > ~/.config/rclone/rclone.conf
-          [gdrive_dados]
+          def extrair_token(val):
+              v = (val or "").strip()
+              if v.startswith("{"):
+                  try:
+                      return json.loads(v).get("refresh_token", v).strip()
+                  except Exception:
+                      pass
+              for linha in v.splitlines():
+                  l = linha.strip()
+                  if "1//" in l:
+                      return l[l.find("1//"):].strip()
+              linhas = [l for l in v.splitlines() if l.strip()]
+              return linhas[-1] if linhas else ""
+
+          client_id = (os.getenv("CLIENT_ID") or "").strip()
+          client_secret = (os.getenv("CLIENT_SECRET") or "").strip()
+          refresh_token = extrair_token(os.getenv("REFRESH_TOKEN"))
+          id_dados = limpar_id(os.getenv("ID_DADOS_RAW"))
+
+          token_obj = json.dumps({
+              "access_token": "dummy",
+              "token_type": "Bearer",
+              "refresh_token": refresh_token,
+              "expiry": "2026-01-01T00:00:00Z"
+          })
+
+          conf_texto = f"""[gdrive_dados]
           type = drive
-          client_id = $CLIENT_ID
-          client_secret = $CLIENT_SECRET
+          client_id = {client_id}
+          client_secret = {client_secret}
           scope = drive
-          token = $JSON_TOKEN
-          root_folder_id = $CLEAN_DADOS
-          EOF
+          token = {token_obj}
+          root_folder_id = {id_dados}
+          """
+
+          os.makedirs(os.path.expanduser("~/.config/rclone"), exist_ok=True)
+          with open(os.path.expanduser("~/.config/rclone/rclone.conf"), "w", encoding="utf-8") as f:
+              f.write(conf_texto.strip())
+          '
 
       - name: Baixar Lote Específico do Runner
         run: |
