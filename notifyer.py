@@ -26,11 +26,14 @@ def _despachar_mensagem_telegram(bot_token: str, chat_id: str, texto_html: str) 
         "parse_mode": "HTML",
         "disable_web_page_preview": True,
     }
-    resp = requests.post(url, json=payload, timeout=20)
-    if resp.status_code != 200:
-        logging.error(f"[TELEGRAM ERRO {resp.status_code}] Chat {chat_id}: {resp.text}")
-    else:
-        logging.info(f"[TELEGRAM OK] Mensagem entregue ao Chat {chat_id}.")
+    try:
+        resp = requests.post(url, json=payload, timeout=20)
+        if resp.status_code != 200:
+            logging.error(f"[TELEGRAM ERRO {resp.status_code}] Chat {chat_id}: {resp.text}")
+        else:
+            logging.info(f"[TELEGRAM OK] Mensagem entregue ao Chat {chat_id}.")
+    except Exception as exc:
+        logging.error(f"[TELEGRAM FALHA REDE] Chat {chat_id}: {exc}")
 
 
 def enviar_alerta_telegram(
@@ -58,11 +61,11 @@ def enviar_alerta_telegram(
     segundos = int(tempo_execucao_s % 60)
 
     if taxa_eficacia >= meta_desejavel:
-        status_meta = f"META DESEJÁVEL ATINGIDA ({taxa_eficacia:.1f}% >= {meta_desejavel:.0f}%)"
+        status_meta = f"META DESEJÁVEL ATINGIDA ({taxa_eficacia:.1f}% &gt;= {meta_desejavel:.0f}%)"
     elif taxa_eficacia >= meta_minima:
-        status_meta = f"META MÍNIMA ATINGIDA ({taxa_eficacia:.1f}% >= {meta_minima:.0f}%)"
+        status_meta = f"META MÍNIMA ATINGIDA ({taxa_eficacia:.1f}% &gt;= {meta_minima:.0f}%)"
     else:
-        status_meta = f"ABAIXO DA META ({taxa_eficacia:.1f}% < {meta_minima:.0f}%)"
+        status_meta = f"ABAIXO DA META ({taxa_eficacia:.1f}% &lt; {meta_minima:.0f}%)"
 
     msg = (
         f"<b>LOTE CONCLUÍDO | RUNNER {runner_id}</b>\n\n"
