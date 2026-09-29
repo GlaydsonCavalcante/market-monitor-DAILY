@@ -396,7 +396,7 @@ async def _navegar_com_timeout_estrito(context, item_tuple: Tuple[int, dict]) ->
                 else r.continue_()
             ),
         )
-        await page.goto(url_alvo, wait_until="domcontentloaded", timeout=5000)
+        await page.goto(url_alvo, wait_until="domcontentloaded", timeout=12000)
 
         if "consent.google" in page.url or "google.com" in page.url:
             for sel in [
@@ -483,7 +483,7 @@ async def processar_lote_playwright_async(
             async with sem:
                 try:
                     return await asyncio.wait_for(
-                        _navegar_com_timeout_estrito(context, par), timeout=8.0
+                        _navegar_com_timeout_estrito(context, par), timeout=16.0
                     )
                 except asyncio.TimeoutError:
                     par[1]["status_extracao"] = "TIMEOUT_BROWSER"
@@ -695,7 +695,7 @@ def processar_arquivo(caminho_arquivo: str, runner_id: int = 0) -> dict:
     )
 
     # Sincronização Imediata no Google Drive via Rclone
-    remote_path = os.getenv("RCLONE_REMOTE_PATH", "gdrive:")
+    remote_path = os.getenv("RCLONE_REMOTE_PATH", "gdrive_dados:")
     os.system(f"rclone copyto '{caminho_arquivo}' '{remote_path}{nome_arq}'")
 
     expurgar_recursos_sistema()
