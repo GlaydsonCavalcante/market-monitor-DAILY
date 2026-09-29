@@ -59,33 +59,43 @@ jobs:
         run: |
           set -e
           mkdir -p dados_locais
-          rclone lsf gdrive_dados: --include "noticias_raw_*.json" > /tmp/todos_arquivos.txt || true
+          rclone lsf gdrive_dados: --include "noticias_raw_*.json" > /tmp/todos_arquivos.txt
           sort /tmp/todos_arquivos.txt -o /tmp/todos_arquivos.txt
           TOTAL=$(wc -l < /tmp/todos_arquivos.txt)
           echo ">> Total de arquivos na pasta de dados brutos: $TOTAL"
 
           if [ "$TOTAL" -eq 0 ]; then
-            echo "Nenhum arquivo localizado para processamento."
-            exit 0
+            echo "ERRO: Nenhum arquivo noticias_raw_*.json encontrado no Google Drive."
+            exit 1
           fi
 
-          split -d -n l/10 /tmp/todos_arquivos.txt /tmp/grupo_
-          ARQ_SPLIT="/tmp/grupo_0${{ matrix.grupo }}"
-          if [ -f "$ARQ_SPLIT" ]; then
-            for f in $(cat "$ARQ_SPLIT"); do
-              rclone copy "gdrive_dados:$f" dados_locais/
-            done
+          python3 -c "
+          with open('/tmp/todos_arquivos.txt') as f:
+              linhas = [l.strip() for l in f if l.strip()]
+          grupo = int('${{ matrix.grupo }}')
+          meus = [arq for i, arq in enumerate(linhas) if i % 10 == grupo]
+          with open('/tmp/meu_lote.txt', 'w') as f_out:
+              f_out.write('\n'.join(meus))
+          print(f'Runner {grupo}: alocados {len(meus)} arquivos de um universo de {len(linhas)}.')
+          "
+
+          if [ -s /tmp/meu_lote.txt ]; then
+            rclone copy gdrive_dados: dados_locais/ --files-from /tmp/meu_lote.txt
+          else
+            echo "Nenhum arquivo alocado para este runner (universo menor que 10 lotes)."
+            exit 0
           fi
 
       - name: Executar Extracao
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          RCLONE_REMOTE_PATH: "gdrive_dados:"
         run: |
           set -e
           ARQUIVOS_LOCAIS=$(find dados_locais/ -name "noticias_raw_*.json" | tr '\n' ' ')
           if [ -z "$ARQUIVOS_LOCAIS" ]; then
-            echo "Nenhum arquivo alocado para este runner."
+            echo "Nenhum arquivo local presente para extração."
             exit 0
           fi
           python extrator_lote.py --arquivos $ARQUIVOS_LOCAIS --runner_id ${{ matrix.grupo }} --meta_sucesso ${{ inputs.meta_sucesso }}
