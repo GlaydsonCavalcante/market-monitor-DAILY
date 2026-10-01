@@ -69,6 +69,9 @@ USER_AGENTS = [
     ),
 ]
 
+# ==============================================================================
+# PADRÕES DE BLOQUEIO DE INFRAESTRUTURA E VALIDAÇÃO FACTUAL
+# ==============================================================================
 PADROES_ANTIBOT = [
     r"unsanctioned scraping by bots",
     r"instituted a challenge designed to keep them out",
@@ -77,7 +80,11 @@ PADROES_ANTIBOT = [
     r"attention required!? \| cloudflare",
     r"please verify you are a human",
     r"access denied \| \d+ access denied",
+    r"access\s+denied",
+    r"you\s+don'?t\s+have\s+permission\s+to\s+access",
+    r"error\s+loading\s+chunks",
     r"ray id: [a-f0-9]{16}",
+    r"incident\s+id:",
     r"pardon our interruption",
     r"verifique se você é humano",
     r"ative o javascript para continuar",
@@ -87,9 +94,49 @@ PADROES_ANTIBOT = [
     r"block details:.*incident id",
     r"perimeterx",
     r"datadome",
+    r"akamai\s*ghost",
+    r"403\s+forbidden",
+    r"401\s+unauthorized",
+    r"acceso\s+denegado",
+    r"permiso\s+denegado",
+    r"accès\s+refusé",
+    r"zugriff\s+verweigert",
+    r"página\s+não\s+encontrada",
 ]
 REGEX_ANTIBOT = re.compile("|".join(PADROES_ANTIBOT), re.IGNORECASE)
 
+STOPWORDS_TITULO = {
+    "the", "a", "an", "and", "or", "but", "in", "on", "at", "to", "for", "of", "with",
+    "by", "from", "up", "about", "into", "over", "after", "o", "a", "os", "as", "um",
+    "uma", "de", "da", "do", "em", "para", "com", "por", "sobre", "el", "la", "los",
+    "las", "en", "por", "para", "con", "del", "al", "der", "die", "das", "und", "im",
+    "le", "les", "des", "pour", "dans", "sur", "que", "is", "are", "was", "were"
+}
+
+
+def validar_integridade_factual(titulo: str, texto: Optional[str]) -> Tuple[bool, str]:
+    """
+    Valida a integridade do conteúdo textual extraído antes de aceitar como SUCESSO.
+    Rejeita textos curtos, assinaturas de infraestrutura CDN/WAF e ausência de sobreposição léxica.
+    """
+    if not texto or len(texto.strip()) < TAMANHO_MINIMO_TEXTO:
+        return False, "TEXTO_MUITO_CURTO"
+
+    amostra = texto[:2500]
+    if REGEX_ANTIBOT.search(amostra):
+        return False, "ERRO_SCRAPING_BLOQUEIO_CDN"
+
+    tokens_titulo = [
+        t.lower() for t in re.findall(r"\b[a-zA-Z0-9\u00C0-\u00FF]{4,}\b", titulo or "")
+        if t.lower() not in STOPWORDS_TITULO
+    ]
+
+    if len(tokens_titulo) >= 3:
+        texto_lower = texto.lower()
+        if not any(token in texto_lower for token in tokens_titulo):
+            return False, "SEM_SOBREPOSICAO_TITULO_CORPO"
+
+    return True, "APTO"
 
 def criar_sessao_http() -> requests.Session:
     """Configura pool persistente de conexões HTTP com retentativas limitadas."""
@@ -341,34 +388,37 @@ def processar_item_estagio_http(item_tuple: Tuple[int, dict]) -> Tuple[int, dict
         item["motivo_bloqueio"] = cat_term
         return idx, item, False
 
+    # Construção da lista ordenada de URLs candidatas (Primária + Espelhos)
+    candidatas = []
     if eh_canonica(url_p):
-        texto, can_extra = extrair_texto_e_canonica_http(url_p)
-        if can_extra and not eh_canonica(item.get("url_canonica_resolvida")):
-            item["url_canonica_resolvida"] = can_extra
-            item["url_utilizada"] = can_extra
+        candidatas.append(url_p)
+    for u_esp in item["urls_espelho_canonicas"]:
+        if u_esp not in candidatas and eh_canonica(u_esp):
+            candidatas.append(u_esp)
 
-        if texto:
-            item["texto_completo"] = texto
-            item["status_extracao"] = "SUCESSO"
-            item["status_resolucao"] = "RESOLVIDO"
-            item["motivo_bloqueio"] = None
-            item["necessita_extracao_manual"] = False
-            return idx, item, True
+    titulo_item = item.get("titulo", "")
+    ultimo_motivo = "HTTP_TIMEOUT_OU_BLOQUEIO"
 
-        for u_esp_can in item["urls_espelho_canonicas"]:
-            texto_esp, can_esp_extra = extrair_texto_e_canonica_http(u_esp_can)
-            if texto_esp:
-                item["url_canonica_resolvida"] = can_esp_extra or u_esp_can
-                item["url_utilizada"] = can_esp_extra or u_esp_can
-                item["texto_completo"] = texto_esp
+    # Itera sobre os espelhos até encontrar um texto que passe na validação factual
+    for u_cand in candidatas:
+        texto_cand, can_extra = extrair_texto_e_canonica_http(u_cand)
+        if texto_cand:
+            apto, motivo = validar_integridade_factual(titulo_item, texto_cand)
+            if apto:
+                item["url_canonica_resolvida"] = can_extra or u_cand
+                item["url_utilizada"] = can_extra or u_cand
+                item["texto_completo"] = texto_cand
                 item["status_extracao"] = "SUCESSO"
                 item["status_resolucao"] = "RESOLVIDO"
                 item["motivo_bloqueio"] = None
                 item["necessita_extracao_manual"] = False
                 return idx, item, True
+            else:
+                ultimo_motivo = motivo
 
+    if candidatas:
         item["status_extracao"] = "FALHA_ACESSO"
-        item["motivo_bloqueio"] = "HTTP_TIMEOUT_OU_BLOQUEIO"
+        item["motivo_bloqueio"] = ultimo_motivo
         item["status_resolucao"] = "RESOLVIDO"
         return idx, item, False
 
@@ -377,17 +427,38 @@ def processar_item_estagio_http(item_tuple: Tuple[int, dict]) -> Tuple[int, dict
     return idx, item, False
 
 
-async def _navegar_com_timeout_estrito(context, item_tuple: Tuple[int, dict]) -> Tuple[int, dict, bool]:
-    """Execução controlada no navegador headless para contornar consent walls e renderizações dinâmicas."""
+async def _navegar_com_timeout_estrito(
+    context, item_tuple: Tuple[int, dict]
+) -> Tuple[int, dict, bool]:
+    """
+    Execução controlada no navegador headless para contornar consent walls e renderizações dinâmicas.
+    Aplica validação factual ativa e fallback imediato para URLs espelho do cluster.
+    """
     idx, item = item_tuple
-    url_alvo = item.get("url_utilizada") or item.get("url_original_rss") or ""
+    titulo = item.get("titulo", "")
+    url_primaria = (
+        sanitizar_url_canonica(item.get("url_canonica_resolvida"))
+        or item.get("url_utilizada")
+        or item.get("url_original_rss")
+        or ""
+    )
+
+    # Constrói fila ordenada de URLs candidatas (Primária + até 2 espelhos canônicos)
+    candidatas = [url_primaria] if url_primaria else []
+    for esp in item.get("urls_espelho_canonicas", []):
+        if esp not in candidatas and eh_canonica(esp):
+            candidatas.append(esp)
+
     page = None
     sucesso = False
+    ultimo_motivo = "CONTEUDO_CURTO_OU_BLOQUEADO"
+
     try:
         page = await context.new_page()
         await page.add_init_script(
             "Object.defineProperty(navigator, 'webdriver', {get: () => undefined})"
         )
+        # Bloqueia recursos pesados para acelerar a carga e poupar banda do runner
         await page.route(
             "**/*",
             lambda r: (
@@ -396,64 +467,83 @@ async def _navegar_com_timeout_estrito(context, item_tuple: Tuple[int, dict]) ->
                 else r.continue_()
             ),
         )
-        await page.goto(url_alvo, wait_until="domcontentloaded", timeout=12000)
 
-        if "consent.google" in page.url or "google.com" in page.url:
-            for sel in [
-                "button:has-text('Aceitar tudo')",
-                "button:has-text('Concordo')",
-                "button:has-text('Accept all')",
-            ]:
-                try:
-                    btn = page.locator(sel).first
-                    if await btn.is_visible(timeout=800):
-                        await btn.click()
-                        break
-                except Exception:
-                    pass
-            try:
-                await page.wait_for_url(lambda u: "google" not in u, timeout=3000)
-            except Exception:
-                pass
-
-        conteudo_html = await page.content()
-        url_final = extrair_canonica_html(conteudo_html) or sanitizar_url_canonica(
-            page.url
-        )
-
-        if url_final:
-            item["url_canonica_resolvida"] = url_final
-            item["url_utilizada"] = url_final
-            item["status_resolucao"] = "RESOLVIDO"
-            texto = extrair_texto_hibrido(conteudo_html)
-            if texto:
-                item["texto_completo"] = texto
-                item["status_extracao"] = "SUCESSO"
-                item["motivo_bloqueio"] = None
-                item["necessita_extracao_manual"] = False
-                sucesso = True
-            else:
-                item["status_extracao"] = "TEXTO_INSUFICIENTE"
-                item["motivo_bloqueio"] = "CONTEUDO_CURTO_OU_BLOQUEADO"
-        else:
-            cat_term = classificar_url_terminal(page.url)
+        for url_alvo in candidatas[:2]:
+            cat_term = classificar_url_terminal(url_alvo)
             if cat_term:
                 item["status_resolucao"] = cat_term
                 item["status_extracao"] = "FALHA_ESTRUTURAL"
                 item["motivo_bloqueio"] = cat_term
+                return idx, item, False
+
+            try:
+                await page.goto(url_alvo, wait_until="domcontentloaded", timeout=12000)
+            except Exception:
+                ultimo_motivo = "TIMEOUT_BROWSER"
+                continue
+
+            # Bypass de consentimento do Google News quando aplicável
+            if "consent.google" in page.url or "google.com" in page.url:
+                for sel in [
+                    "button:has-text('Aceitar tudo')",
+                    "button:has-text('Concordo')",
+                    "button:has-text('Accept all')",
+                ]:
+                    try:
+                        btn = page.locator(sel).first
+                        if await btn.is_visible(timeout=800):
+                            await btn.click()
+                            break
+                    except Exception:
+                        pass
+                try:
+                    await page.wait_for_url(lambda u: "google" not in u, timeout=3000)
+                except Exception:
+                    pass
+
+            conteudo_html = await page.content()
+            url_final = extrair_canonica_html(conteudo_html) or sanitizar_url_canonica(page.url)
+
+            if not url_final:
+                cat_term_redirect = classificar_url_terminal(page.url)
+                if cat_term_redirect:
+                    item["status_resolucao"] = cat_term_redirect
+                    item["status_extracao"] = "FALHA_ESTRUTURAL"
+                    item["motivo_bloqueio"] = cat_term_redirect
+                    return idx, item, False
+                ultimo_motivo = "NAO_REDIRECIONOU_GOOGLE"
+                continue
+
+            texto = extrair_texto_hibrido(conteudo_html)
+            apto, motivo = validar_integridade_factual(titulo, texto)
+
+            if apto:
+                item["url_canonica_resolvida"] = url_final
+                item["url_utilizada"] = url_final
+                item["texto_completo"] = texto
+                item["status_extracao"] = "SUCESSO"
+                item["status_resolucao"] = "RESOLVIDO"
+                item["motivo_bloqueio"] = None
+                item["necessita_extracao_manual"] = False
+                sucesso = True
+                break
             else:
-                item["status_resolucao"] = "FALHA_REDIRECT"
-                item["status_extracao"] = "FALHA_ACESSO"
-                item["motivo_bloqueio"] = "NAO_REDIRECIONOU_GOOGLE"
-    except Exception as e:
+                ultimo_motivo = motivo
+
+        if not sucesso and item.get("status_extracao") != "FALHA_ESTRUTURAL":
+            item["status_extracao"] = "FALHA_ACESSO"
+            item["motivo_bloqueio"] = ultimo_motivo
+
+    except Exception as exc:
         item["status_extracao"] = "TIMEOUT_BROWSER"
-        item["motivo_bloqueio"] = str(type(e).__name__)
+        item["motivo_bloqueio"] = str(type(exc).__name__)
     finally:
         if page:
             try:
                 await page.close()
             except Exception:
                 pass
+
     return idx, item, sucesso
 
 
@@ -518,9 +608,13 @@ def expurgar_recursos_sistema():
 
 
 def processar_arquivo(caminho_arquivo: str, runner_id: int = 0) -> dict:
-    """Executa a cadeia de extração completa para um único arquivo JSON."""
+    """
+    Executa a cadeia de extração completa para um único arquivo JSON.
+    Estágio 1 (Fast HTTP) -> Estágio 2 (Playwright Stealth) -> Auditoria Factual Final -> Rclone Sync.
+    """
     t_ini_arquivo = time.perf_counter()
     nome_arq = os.path.basename(caminho_arquivo)
+
     with open(caminho_arquivo, "r", encoding="utf-8") as f:
         lote = json.load(f)
 
@@ -554,11 +648,12 @@ def processar_arquivo(caminho_arquivo: str, runner_id: int = 0) -> dict:
         return {"nome": nome_arq, "status": "SALTADO", "eficacia": efic_ini}
 
     logging.info(
-        f"[PROCESSANDO] {nome_arq} - Total: {total_n} | Válidos Iniciais:"
-        f" {sucesso_ini} ({efic_ini:.1f}%)"
+        f"[PROCESSANDO] {nome_arq} - Total: {total_n} | Válidos Iniciais: {sucesso_ini} ({efic_ini:.1f}%)"
     )
 
-    # Estágio 1: Fast HTTP
+    # --------------------------------------------------------------------------
+    # Estágio 1: Fast HTTP (Pool concorrente de requests leves)
+    # --------------------------------------------------------------------------
     pendentes_http = [
         (i, it)
         for i, it in enumerate(lote)
@@ -586,7 +681,9 @@ def processar_arquivo(caminho_arquivo: str, runner_id: int = 0) -> dict:
         if (suc_atual / univ_util * 100.0) >= META_SUCESSO_GLOBAL:
             break
 
-    # Estágio 2: Headless Browser (Playwright Stealth)
+    # --------------------------------------------------------------------------
+    # Estágio 2: Headless Browser (Playwright com evasão stealth e fallback)
+    # --------------------------------------------------------------------------
     suc_pos_http = sum(
         1
         for it in lote
@@ -620,7 +717,9 @@ def processar_arquivo(caminho_arquivo: str, runner_id: int = 0) -> dict:
             if (suc_atual / univ_util * 100.0) >= META_SUCESSO_GLOBAL:
                 break
 
-    # Harmonização Canônica e Expurgo Anti-Bot Residual
+    # --------------------------------------------------------------------------
+    # Estágio 3: Harmonização Canônica e Validação Factual Rigorosa
+    # --------------------------------------------------------------------------
     for item in lote:
         u_can = item.get("url_canonica_resolvida")
         u_util = item.get("url_utilizada")
@@ -644,23 +743,27 @@ def processar_arquivo(caminho_arquivo: str, runner_id: int = 0) -> dict:
         ]
 
         txt = item.get("texto_completo")
-        if (
-            txt
-            and item.get("status_extracao") == "SUCESSO"
-            and REGEX_ANTIBOT.search(txt)
-        ):
-            item["texto_completo"] = None
-            item["status_extracao"] = "FALHA_ACESSO"
-            item["motivo_bloqueio"] = "ANTIBOT_CHALLENGE"
-            item["necessita_extracao_manual"] = True
+        tit = item.get("titulo", "")
+        # Checagem estrita de integridade factual antes de confirmar SUCESSO
+        if txt and item.get("status_extracao") == "SUCESSO":
+            apto, motivo = validar_integridade_factual(tit, txt)
+            if not apto:
+                item["texto_completo"] = None
+                item["status_extracao"] = "FALHA_ACESSO"
+                item["motivo_bloqueio"] = motivo
+                item["necessita_extracao_manual"] = True
 
+    # --------------------------------------------------------------------------
     # Gravação Atômica Local
+    # --------------------------------------------------------------------------
     tmp = caminho_arquivo + ".tmp"
     with open(tmp, "w", encoding="utf-8") as f_out:
         json.dump(lote, f_out, ensure_ascii=False, indent=2)
     os.replace(tmp, caminho_arquivo)
 
-    # Consolidação de Métricas e Notificação Individual via Telegram
+    # --------------------------------------------------------------------------
+    # Métricas Finais e Notificações
+    # --------------------------------------------------------------------------
     t_duracao = time.perf_counter() - t_ini_arquivo
     suc_final = sum(
         1
@@ -694,13 +797,15 @@ def processar_arquivo(caminho_arquivo: str, runner_id: int = 0) -> dict:
         tempo_execucao_s=t_duracao,
     )
 
-    # Sincronização Imediata no Google Drive via Rclone
+    # Sincronização Imediata com Google Drive via Rclone
     remote_path = os.getenv("RCLONE_REMOTE_PATH", "gdrive_dados:")
     os.system(f"rclone copyto '{caminho_arquivo}' '{remote_path}{nome_arq}'")
 
     expurgar_recursos_sistema()
     efic_final = (suc_final / univ_util * 100.0)
-    logging.info(f"[CONCLUÍDO] {nome_arq} processado e sincronizado no Drive.")
+    logging.info(
+        f"[CONCLUÍDO] {nome_arq} processado ({suc_final}/{univ_util} = {efic_final:.1f}%) e sincronizado no Drive."
+    )
     return {"nome": nome_arq, "status": "PROCESSADO", "eficacia": efic_final}
 
 
