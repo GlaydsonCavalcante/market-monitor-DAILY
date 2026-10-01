@@ -14,6 +14,7 @@ from datetime import datetime
 import os
 import random
 import re
+import sys
 import time
 from typing import Dict, List, Optional, Tuple
 import unicodedata
@@ -160,7 +161,7 @@ def decode_token_offline(token: str) -> Optional[str]:
 
 
 def resolve_publisher_url(google_news_url: str) -> str:
-    """Resolve a URL final do veículo jornalístico via decodificação offline ou RPC."""
+    """Decodifica URL do Google News combinando rotina offline e biblioteca externa."""
     if not google_news_url or "news.google.com" not in google_news_url:
         return google_news_url
 
@@ -171,23 +172,23 @@ def resolve_publisher_url(google_news_url: str) -> str:
         if extracted and "google.com" not in extracted:
             return extracted
 
-    try:
-        res = gnewsdecoder(google_news_url)
-        if isinstance(res, dict):
-            decoded = res.get("decoded_url")
-        elif isinstance(res, str):
-            decoded = res
-        else:
-            decoded = None
+    # Inspeciona dinamicamente a função exportada (suporte a v0.1.x e v0.2.x)
+    fn_decode = getattr(googlenewsdecoder, "gnewsdecoder", None) or getattr(googlenewsdecoder, "decoderv1", None)
+    if fn_decode:
+        try:
+            res = fn_decode(google_news_url)
+        except TypeError:
+            # Fallback para assinaturas legadas que exigiam o parâmetro interval
+            res = fn_decode(google_news_url, interval=0.1)
+        except Exception as exc:
+            sys.stderr.write(f"[WARN] Falha decodificacao RPC: {exc}\n")
+            res = None
 
-        if decoded and decoded.startswith("http") and "news.google.com" not in decoded:
+        decoded = res.get("decoded_url") if isinstance(res, dict) else res
+        if decoded and isinstance(decoded, str) and decoded.startswith("http") and "news.google.com" not in decoded:
             return decoded
-    except Exception as exc:
-        # Não mascara em nível crítico; registra no stderr para auditoria
-        sys.stderr.write(f"[WARN] Falha decodificacao RPC: {exc}\n")
 
-    return google_news_url
-    
+    return google_news_url    
 
 def build_rss_query(base_term: str, excluded_terms: list, preferred_domains: list) -> str:
     """Gera string de busca combinando operadores booleanos e exclusões."""
