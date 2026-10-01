@@ -54,11 +54,26 @@ jobs:
 
       - name: Configurar Rclone em Memoria para Acesso ao Drive (Configuracoes)
         env:
-          GDRIVE_SA_KEY_B64: ${{ secrets.GDRIVE_SA_KEY }}
+          GDRIVE_SA_KEY: ${{ secrets.GDRIVE_SA_KEY }}
           ID_CONFIGS: ${{ secrets.GDRIVE_CONFIG_FOLDER_ID }}
         run: |
-          echo "$GDRIVE_SA_KEY_B64" | base64 -d > /tmp/gdrive_sa.json
-          python -c 'import json; json.load(open("/tmp/gdrive_sa.json"))'
+          python3 -c '
+          import os, json, base64
+          raw = os.environ.get("GDRIVE_SA_KEY", "").strip()
+          try:
+              # Tentativa 1: Trata como JSON direto
+              data = json.loads(raw)
+          except Exception:
+              try:
+                  # Tentativa 2: Trata como Base64
+                  decoded = base64.b64decode(raw).decode("utf-8", errors="ignore")
+                  data = json.loads(decoded)
+              except Exception as exc:
+                  raise ValueError(f"Secret GDRIVE_SA_KEY não é um JSON nem Base64 válido: {exc}")
+
+          with open("/tmp/gdrive_sa.json", "w", encoding="utf-8") as f:
+              json.dump(data, f)
+          '
 
           CLEAN_CONFIGS=$(echo "$ID_CONFIGS" | grep -oE '[a-zA-Z0-9_-]{25,}' | head -n 1)
           if [ -z "$CLEAN_CONFIGS" ]; then CLEAN_CONFIGS="$ID_CONFIGS"; fi
