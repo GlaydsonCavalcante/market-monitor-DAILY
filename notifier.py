@@ -27,9 +27,10 @@ def enviar_telegram(
     bot_token = os.getenv("TELEGRAM_BOT_TOKEN")
     chat_ids_raw = os.getenv("TELEGRAM_CHAT_ID")
 
-    if not bot_token or not chat_ids_raw:
-        print("[TELEGRAM] TELEGRAM_BOT_TOKEN ou TELEGRAM_CHAT_ID ausentes no ambiente.", flush=True)
-        return
+    if not bot_token:
+        raise ValueError("A variável de ambiente TELEGRAM_BOT_TOKEN não foi definida.")
+    if not chat_ids_raw:
+        raise ValueError("A variável de ambiente TELEGRAM_CHAT_ID não foi definida.")
 
     chat_ids = [c.strip() for c in chat_ids_raw.split(",") if c.strip()]
     url_msg = f"https://api.telegram.org/bot{bot_token}/sendMessage"
@@ -39,36 +40,36 @@ def enviar_telegram(
     agora_bsb = datetime.now(FUSO_BRASILIA).strftime("%d/%m/%Y %H:%M:%S")
 
     resumo_msg = (
-        f"📊 <b>MONITORAMENTO DIÁRIO: {regiao_nome.upper()}</b>\n\n"
-        f"📅 <b>Data/Hora (BSB):</b> {agora_bsb}\n"
-        f"⏱ <b>Janela:</b> Últimas 24 horas\n"
-        f"📥 <b>Matérias Brutas:</b> {total_brutas}\n"
-        f"🧩 <b>Clusters Únicos:</b> {total_clusters}\n"
-        f"⚡ <b>Textos Extraídos:</b> {sucessos} ({taxa_sucesso:.1f}%)\n"
-        f"🔒 <b>Bloqueadas / Falhas:</b> {bloqueados}\n\n"
-        f"📎 <i>Arquivo JSON consolidado em anexo.</i>"
+        f"<b>MONITORAMENTO DIÁRIO: {regiao_nome.upper()}</b>\n\n"
+        f"<b>Data/Hora (BSB):</b> {agora_bsb}\n"
+        f"<b>Janela:</b> Últimas 24 horas\n"
+        f"<b>Matérias Brutas:</b> {total_brutas}\n"
+        f"<b>Clusters Únicos:</b> {total_clusters}\n"
+        f"<b>Textos Extraídos:</b> {sucessos} ({taxa_sucesso:.1f}%)\n"
+        f"<b>Bloqueadas / Falhas:</b> {bloqueados}\n\n"
+        f"<i>Arquivo JSON consolidado em anexo.</i>"
     )
 
     for chat_id in chat_ids:
-        try:
-            requests.post(
-                url_msg,
-                json={"chat_id": chat_id, "text": resumo_msg, "parse_mode": "HTML"},
-                timeout=30,
-            )
-        except Exception as e:
-            print(f"[TELEGRAM] Erro ao enviar mensagem para {chat_id}: {e}", flush=True)
+        # Envio do texto resumido
+        resp_msg = requests.post(
+            url_msg,
+            json={"chat_id": chat_id, "text": resumo_msg, "parse_mode": "HTML"},
+            timeout=30,
+        )
+        if resp_msg.status_code != 200:
+            raise RuntimeError(f"Falha ao enviar mensagem Telegram para {chat_id} (HTTP {resp_msg.status_code}): {resp_msg.text}")
 
+        # Envio dos anexos JSON
         for caminho in arquivos:
             if not os.path.exists(caminho):
                 continue
-            try:
-                with open(caminho, "rb") as doc:
-                    requests.post(
-                        url_doc,
-                        data={"chat_id": chat_id},
-                        files={"document": doc},
-                        timeout=60,
-                    )
-            except Exception as e:
-                print(f"[TELEGRAM] Erro ao enviar documento {caminho} para {chat_id}: {e}", flush=True)
+            with open(caminho, "rb") as doc:
+                resp_doc = requests.post(
+                    url_doc,
+                    data={"chat_id": chat_id},
+                    files={"document": doc},
+                    timeout=60,
+                )
+                if resp_doc.status_code != 200:
+                    raise RuntimeError(f"Falha ao enviar documento {caminho} para {chat_id} (HTTP {resp_doc.status_code}): {resp_doc.text}")
