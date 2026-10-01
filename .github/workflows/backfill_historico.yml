@@ -42,12 +42,12 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-          cache: 'pip'
+          # Removido cache: 'pip' para expurgar o cache legado de 3.3GB do PyTorch
 
       - name: Instalar dependencias e Navegador Headless
         run: |
-          pip install --upgrade pip
-          pip install -r requirements.txt
+          python -m pip install --upgrade pip
+          pip install --no-cache-dir -r requirements.txt rapidfuzz
           playwright install chromium
           playwright install-deps chromium
           sudo apt-get update && sudo apt-get install -y rclone
