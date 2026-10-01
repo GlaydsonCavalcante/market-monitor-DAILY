@@ -1,34 +1,50 @@
-name: Market Monitor - Fase B (Extracao Matricial)
+name: DAILY - Monitoramento de Mercado Multirregional
 
 on:
+  schedule:
+    # Execução diária regular às 06:00 UTC (03:00 Horário de Brasília)
+    - cron: '0 6 * * *'
   workflow_dispatch:
-    inputs:
-      meta_sucesso:
-        description: 'Meta desejável de extração (%)'
-        required: true
-        default: '70.0'
-        type: string
 
-jobs:
-  executar_extracao:
-    name: "Fase B: Extracao Matricial"
+env:
+  TZ: "America/Sao_Paulo"
+
+jobs: 
+  executar-shard:
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     strategy:
       fail-fast: false
       matrix:
-        grupo: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
+        shard:
+          - latam_fintechs
+          - latam_plataformas
+          - latam_tendencias
+          - anglo_fintechs
+          - anglo_plataformas
+          - anglo_tendencias
+          - europa
+          - asia_cn_sg
+          - asia_jp_kr
+          - mea_india
 
     steps:
-      - name: Checkout do Repositorio
+      - name: Baixar codigo do repositorio
         uses: actions/checkout@v4
 
-      - name: Configurar Python 3.11
+      - name: Liberar espaco em disco no Runner
+        run: |
+          sudo rm -rf /usr/share/dotnet
+          sudo rm -rf /usr/local/lib/android
+          sudo rm -rf /opt/ghc
+
+      - name: Configurar ambiente Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
           cache: 'pip'
 
-      - name: Instalar Dependencias e Playwright
+      - name: Instalar dependencias e Navegador Headless
         run: |
           pip install --upgrade pip
           pip install -r requirements.txt
@@ -36,78 +52,43 @@ jobs:
           playwright install-deps chromium
           sudo apt-get update && sudo apt-get install -y rclone
 
-      - name: Configurar Rclone para Dados Brutos
+      - name: Configurar Rclone em Memoria para Acesso ao Drive (Configuracoes)
         env:
-          GDRIVE_SA_KEY: ${{ secrets.GDRIVE_SA_KEY }}
-          ID_DADOS_RAW: ${{ secrets.GDRIVE_DADOS_BRUTOS_FOLDER_ID }}
+          GDRIVE_SA_KEY_B64: ${{ secrets.GDRIVE_SA_KEY }}
+          ID_CONFIGS: ${{ secrets.GDRIVE_CONFIG_FOLDER_ID }}
         run: |
-          echo "$GDRIVE_SA_KEY" > /tmp/gdrive_sa.json
-          CLEAN_DADOS=$(echo "$ID_DADOS_RAW" | grep -oE '[a-zA-Z0-9_-]{25,}' | head -n 1)
-          if [ -z "$CLEAN_DADOS" ]; then CLEAN_DADOS="$ID_DADOS_RAW"; fi
+          echo "$GDRIVE_SA_KEY_B64" | base64 -d > /tmp/gdrive_sa.json
+          python -c 'import json; json.load(open("/tmp/gdrive_sa.json"))'
+
+          CLEAN_CONFIGS=$(echo "$ID_CONFIGS" | grep -oE '[a-zA-Z0-9_-]{25,}' | head -n 1)
+          if [ -z "$CLEAN_CONFIGS" ]; then CLEAN_CONFIGS="$ID_CONFIGS"; fi
 
           mkdir -p ~/.config/rclone
           cat <<EOF > ~/.config/rclone/rclone.conf
-          [gdrive_dados]
+          [gdrive_config]
           type = drive
           scope = drive
           service_account_file = /tmp/gdrive_sa.json
-          root_folder_id = $CLEAN_DADOS
+          root_folder_id = $CLEAN_CONFIGS
           include_shared_with_me = true
           EOF
 
-      - name: Baixar Lote Específico do Runner
-        run: |
-          set -e
-          mkdir -p dados_locais
-          rclone lsf gdrive_dados: --include "noticias_raw_*.json" > /tmp/todos_arquivos.txt
-          sort /tmp/todos_arquivos.txt -o /tmp/todos_arquivos.txt
-          TOTAL=$(wc -l < /tmp/todos_arquivos.txt)
-          echo ">> Total de arquivos na pasta de dados brutos: $TOTAL"
-
-          if [ "$TOTAL" -eq 0 ]; then
-            echo "ERRO: Nenhum arquivo noticias_raw_*.json encontrado no Google Drive."
-            exit 1
-          fi
-
-          python3 -c "
-          with open('/tmp/todos_arquivos.txt') as f:
-              linhas = [l.strip() for l in f if l.strip()]
-          grupo = int('${{ matrix.grupo }}')
-          meus = [arq for i, arq in enumerate(linhas) if i % 10 == grupo]
-          with open('/tmp/meu_lote.txt', 'w') as f_out:
-              f_out.write('\n'.join(meus))
-          print(f'Runner {grupo}: alocados {len(meus)} arquivos de um universo de {len(linhas)}.')
-          "
-
-          if [ -s /tmp/meu_lote.txt ]; then
-            rclone copy gdrive_dados: dados_locais/ --files-from /tmp/meu_lote.txt
-          else
-            echo "Nenhum arquivo alocado para este runner (universo menor que 10 lotes)."
-            exit 0
-          fi
-
-      - name: Executar Extracao
+      - name: Executar Pipeline Diario do Shard [${{ matrix.shard }}]
         env:
+          PYTHONUNBUFFERED: "1"
+          SHARD_NAME: ${{ matrix.shard }}
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-          RCLONE_REMOTE_PATH: "gdrive_dados:"
-        run: |
-          set -e
-          ARQUIVOS_LOCAIS=$(find dados_locais/ -name "noticias_raw_*.json" | tr '\n' ' ')
-          if [ -z "$ARQUIVOS_LOCAIS" ]; then
-            echo "Nenhum arquivo local presente para extração."
-            exit 0
-          fi
-          python extrator_lote.py --arquivos $ARQUIVOS_LOCAIS --runner_id ${{ matrix.grupo }} --meta_sucesso ${{ inputs.meta_sucesso }}
+        run: python main.py --shard ${{ matrix.shard }}
 
-      - name: Atualizar Arquivos Concluídos no Google Drive
+      - name: Preservar JSON em Artifacts do GitHub
         if: always()
-        run: |
-          if [ -d "dados_locais" ]; then
-            for f in dados_locais/noticias_raw_*.json; do
-              if [ -f "$f" ]; then
-                rclone copyto "$f" "gdrive_dados:$(basename "$f")"
-              fi
-            done
-          fi
-          rm -f /tmp/gdrive_sa.json
+        uses: actions/upload-artifact@v4
+        with:
+          name: noticias-${{ matrix.shard }}
+          path: noticias_${{ matrix.shard }}_*.json
+          retention-days: 7
+
+      - name: Expurgo de Credenciais Temporarias
+        if: always()
+        run: rm -rf /tmp/gdrive_sa.json ~/.config/rclone/rclone.conf
