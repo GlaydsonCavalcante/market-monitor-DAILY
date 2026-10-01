@@ -24,13 +24,19 @@ def enviar_telegram(
     bloqueados: int,
 ) -> None:
     """Envia sumário da execução regional e anexa arquivos JSON para os chats configurados."""
-    bot_token = os.getenv("TELEGRAM_BOT_TOKEN")
-    chat_ids_raw = os.getenv("TELEGRAM_CHAT_ID")
+    raw_token = os.getenv("TELEGRAM_BOT_TOKEN", "").strip().strip('"').strip("'")
+    chat_ids_raw = os.getenv("TELEGRAM_CHAT_ID", "").strip().strip('"').strip("'")
 
-    if not bot_token:
+    if not raw_token:
         raise ValueError("A variável de ambiente TELEGRAM_BOT_TOKEN não foi definida.")
     if not chat_ids_raw:
         raise ValueError("A variável de ambiente TELEGRAM_CHAT_ID não foi definida.")
+
+    # Sanitiza o token caso o usuário tenha colado com o prefixo 'bot'
+    if raw_token.lower().startswith("bot"):
+        bot_token = raw_token[3:]
+    else:
+        bot_token = raw_token
 
     chat_ids = [c.strip() for c in chat_ids_raw.split(",") if c.strip()]
     url_msg = f"https://api.telegram.org/bot{bot_token}/sendMessage"
