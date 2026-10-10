@@ -79,10 +79,10 @@ def enviar_telegram(
                 f"Falha ao enviar mensagem Telegram para {chat_id} (HTTP {resp_msg.status_code}): {resp_msg.text}"
             )
 
-        # 2. Envio dos arquivos JSON anexados
+        # 2. Envio dos arquivos JSON anexados com validacao estrita de integridade
         for caminho in arquivos:
             if not os.path.exists(caminho):
-                continue
+                raise FileNotFoundError(f"Arquivo obrigatorio para despacho nao localizado: {caminho}")
             nome_arquivo = os.path.basename(caminho)
             with open(caminho, "rb") as doc:
                 resp_doc = requests.post(
