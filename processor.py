@@ -162,8 +162,9 @@ def decode_token_offline(token: str) -> Optional[str]:
 
 def resolve_publisher_url(google_news_url: str) -> str:
     """
-    Decodifica URL primária do Google News combinando rotina Base64 offline 
-    e biblioteca externa isolada sob timeout estrito para evitar travamento de worker.
+    Decodifica a URL final a partir do redirecionamento do Google News.
+    Executa a resolução externa com limite de tempo estrito de 3.5s.
+    Exceções não relacionadas a timeout são propagadas diretamente.
     """
     if not google_news_url or "news.google.com" not in google_news_url:
         return google_news_url
@@ -175,31 +176,15 @@ def resolve_publisher_url(google_news_url: str) -> str:
         if extracted and "google.com" not in extracted:
             return extracted
 
-    try:
-        import googlenewsdecoder
-        fn_decode = getattr(googlenewsdecoder, "gnewsdecoder", None) or getattr(googlenewsdecoder, "decoderv1", None)
-    except ImportError as e:
-        sys.stderr.write(f"[WARN] Biblioteca googlenewsdecoder inacessivel: {e}\n")
-        return google_news_url
-
+    fn_decode = getattr(googlenewsdecoder, "gnewsdecoder", None) or getattr(googlenewsdecoder, "decoderv1", None)
     if not fn_decode:
         return google_news_url
 
-    def _executar_decoder():
-        try:
-            return fn_decode(google_news_url)
-        except TypeError:
-            return fn_decode(google_news_url, interval=0.1)
-
     with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
-        futuro = executor.submit(_executar_decoder)
+        futuro = executor.submit(fn_decode, google_news_url)
         try:
             res = futuro.result(timeout=3.5)
         except concurrent.futures.TimeoutError:
-            sys.stderr.write(f"[WARN] Timeout na decodificacao RPC da URL: {google_news_url}\n")
-            return google_news_url
-        except Exception as exc:
-            sys.stderr.write(f"[WARN] Falha decodificacao RPC: {exc}\n")
             return google_news_url
 
     decoded = res.get("decoded_url") if isinstance(res, dict) else res
