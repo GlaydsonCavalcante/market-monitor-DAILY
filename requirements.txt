@@ -4,3 +4,4 @@ trafilatura
 rapidfuzz>=3.0.0
 googlenewsdecoder>=0.1.5
 playwright>=1.40.0
+selectolax<1.0.0
