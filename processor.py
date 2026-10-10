@@ -247,7 +247,7 @@ def scrape_article_text(url: str, timeout: int = 5) -> Tuple[Optional[str], str,
     }
     try:
         resp = requests.get(real_url, headers=headers, timeout=(2.5, float(timeout)), allow_redirects=True)
-    except requests.exceptions.RequestException as e:
+    except (requests.exceptions.RequestException, UnicodeError) as e:
         return None, f"FALHA_CONEXAO_{type(e).__name__}", real_url
 
     if resp.status_code != 200:
