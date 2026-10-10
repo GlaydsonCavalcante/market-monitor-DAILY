@@ -139,8 +139,17 @@ def executar_pipeline_diario(caminho_ou_shard: str) -> None:
         with open(nome_json, "w", encoding="utf-8") as f:
             json.dump([], f, ensure_ascii=False, indent=2)
         registrar_step_summary(regiao, 0, 0, 0, 0)
+        enviar_telegram(
+            regiao_nome=regiao,
+            arquivos=[nome_json],
+            total_brutas=0,
+            total_clusters=0,
+            total_processadas=0,
+            sucessos=0,
+            bloqueados=0,
+        )
         return
-
+        
     # 2. Agrupamento Semântico Rápido
     prefixo = f"CLUS_{agora_bsb.strftime('%Y%m%d')}_{regiao[:4].upper()}"
     clusters = processor.cluster_articles_rapido(raw_articles, similarity_threshold=80.0, prefixo_id=prefixo)
@@ -157,8 +166,14 @@ def executar_pipeline_diario(caminho_ou_shard: str) -> None:
         for f in concurrent.futures.as_completed(futuros):
             processed_results.append(f.result())
 
+    # 3.1 Checkpoint de seguranca: grava imediatamente os sucessos do Fast HTTP
+    # Garante a persistencia dos dados mesmo em eventual aborto ou falha no Playwright
+    with open(nome_json, "w", encoding="utf-8") as f:
+        json.dump(processed_results, f, ensure_ascii=False, indent=2)
+    
     # 4. Extração Concorrente - Estágio 2: Playwright Stealth para retidos
     bloqueados_indices = [i for i, r in enumerate(processed_results) if r["status_extracao"] != "SUCESSO"]
+   
     if bloqueados_indices:
         print(f">> Ativando Playwright Stealth para {len(bloqueados_indices)} matérias bloqueadas...", flush=True)
         itens_pw = [processed_results[i] for i in bloqueados_indices]
