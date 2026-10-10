@@ -519,7 +519,7 @@ async def processar_bloqueados_playwright(itens_bloqueados: list) -> list:
             args=["--no-sandbox", "--disable-dev-shm-usage", "--disable-blink-features=AutomationControlled", "--disable-gpu"],
         )
         context = await browser.new_context(user_agent=random.choice(USER_AGENTS), viewport={"width": 1280, "height": 800})
-        sem = asyncio.Semaphore(8)
+        sem = asyncio.Semaphore(2)
 
         async def _safe_run(item):
             async with sem:
