@@ -23,11 +23,20 @@ import xml.etree.ElementTree as ET
 from zoneinfo import ZoneInfo
 
 from bs4 import BeautifulSoup
-import googlenewsdecoder
 from playwright.async_api import async_playwright
 from rapidfuzz import fuzz
 import requests
+import selectolax.lexbor
 import trafilatura
+
+# Redireciona o backend obsoleto (Modest) para o backend Lexbor no selectolax
+# Elimina corrupcao de memoria C (munmap_chunk) sob execucao multi-thread
+if "selectolax.parser" not in sys.modules:
+    _mod_compat = types.ModuleType("selectolax.parser")
+    _mod_compat.HTMLParser = selectolax.lexbor.LexborHTMLParser
+    sys.modules["selectolax.parser"] = _mod_compat
+
+import googlenewsdecoder
 import concurrent.futures
 
 FUSO_BRASILIA = ZoneInfo("America/Sao_Paulo")
@@ -163,9 +172,8 @@ def decode_token_offline(token: str) -> Optional[str]:
 
 def resolve_publisher_url(google_news_url: str) -> str:
     """
-    Decodifica a URL final a partir do redirecionamento do Google News.
-    Executa a resolução externa com limite de tempo estrito de 3.5s.
-    Exceções não relacionadas a timeout são propagadas diretamente.
+    Decodifica URL primária do Google News combinando rotina Base64 offline
+    e resolução RPC via biblioteca externa com motor Lexbor nativo.
     """
     if not google_news_url or "news.google.com" not in google_news_url:
         return google_news_url
@@ -181,18 +189,17 @@ def resolve_publisher_url(google_news_url: str) -> str:
     if not fn_decode:
         return google_news_url
 
-    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
-        futuro = executor.submit(fn_decode, google_news_url)
-        try:
-            res = futuro.result(timeout=3.5)
-        except concurrent.futures.TimeoutError:
-            return google_news_url
+    try:
+        res = fn_decode(google_news_url)
+    except TypeError:
+        res = fn_decode(google_news_url, interval=0.1)
 
     decoded = res.get("decoded_url") if isinstance(res, dict) else res
     if decoded and isinstance(decoded, str) and decoded.startswith("http") and "news.google.com" not in decoded:
         return decoded
 
     return google_news_url
+
 
 def build_rss_query(base_term: str, excluded_terms: list, preferred_domains: list) -> str:
     """Gera string de busca combinando operadores booleanos e exclusões."""
@@ -332,7 +339,6 @@ def process_cluster_with_fallback(cluster: dict, timeout: int = 6) -> dict:
             urls_to_try.append(esp)
 
     historico = list(cluster.get("historico_tentativas", []))
-    espelhos_decodificados = [resolve_publisher_url(e) for e in cluster.get("urls_espelho", [])]
     titulo = cluster.get("titulo", "")
     primeira_url_resolvida = None
     ultimo_motivo = "HTTP_TIMEOUT_OU_BLOQUEIO"
@@ -373,10 +379,11 @@ def process_cluster_with_fallback(cluster: dict, timeout: int = 6) -> dict:
             "timestamp": datetime.now(FUSO_BRASILIA).strftime("%Y-%m-%d %H:%M:%S"),
         })
 
+        espelhos_restantes = [u for u in cluster.get("urls_espelho", []) if u != link]
         cluster["url_utilizada"] = final_url
         cluster["url_canonica_resolvida"] = final_url
-        cluster["urls_espelho_disponiveis"] = [u for u in espelhos_decodificados if u != final_url]
-        cluster["urls_espelho_canonicas"] = [u for u in espelhos_decodificados if u != final_url and "news.google.com" not in u]
+        cluster["urls_espelho_disponiveis"] = espelhos_restantes
+        cluster["urls_espelho_canonicas"] = [u for u in espelhos_restantes if "news.google.com" not in u]
         cluster["status_resolucao"] = "RESOLVIDO"
         cluster["status_extracao"] = "SUCESSO"
         cluster["texto_completo"] = texto
@@ -385,10 +392,11 @@ def process_cluster_with_fallback(cluster: dict, timeout: int = 6) -> dict:
         cluster["historico_tentativas"] = historico
         return cluster
 
+    espelhos_finais = [resolve_publisher_url(e) for e in cluster.get("urls_espelho", [])]
     cluster["url_utilizada"] = primeira_url_resolvida or cluster["url_primaria"]
     cluster["url_canonica_resolvida"] = primeira_url_resolvida or cluster["url_primaria"]
-    cluster["urls_espelho_disponiveis"] = espelhos_decodificados
-    cluster["urls_espelho_canonicas"] = [u for u in espelhos_decodificados if "news.google.com" not in u]
+    cluster["urls_espelho_disponiveis"] = espelhos_finais
+    cluster["urls_espelho_canonicas"] = [u for u in espelhos_finais if "news.google.com" not in u]
     cluster["status_resolucao"] = "FALHA"
     cluster["status_extracao"] = "CONTEUDO_BLOQUEADO"
     cluster["texto_completo"] = ""
