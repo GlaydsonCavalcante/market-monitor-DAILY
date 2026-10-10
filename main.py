@@ -95,10 +95,17 @@ def registrar_step_summary(regiao: str, total_brutas: int, total_clusters: int, 
 
 def executar_pipeline_diario(caminho_ou_shard: str) -> None:
     cfg = carregar_modulo_config(caminho_ou_shard)
-    regiao = getattr(cfg, "REGIAO_NOME", "GLOBAL").lower()
+    
+    # -------------------------------------------------------------------------
+    # Normalizacao do identificador do shard para garantir alinhamento 
+    # deterministico entre o nome do arquivo gerado e o step de upload-artifact
+    # -------------------------------------------------------------------------
+    shard_id = os.path.basename(caminho_ou_shard).replace("config_", "").replace(".py", "").strip().lower()
+    regiao = getattr(cfg, "REGIAO_NOME", shard_id).lower()
+    
     agora_bsb = datetime.now(FUSO_BRASILIA)
     ts = agora_bsb.strftime("%Y%m%d_%H%M%S")
-    nome_json = f"noticias_{regiao}_{ts}.json"
+    nome_json = f"noticias_{shard_id}_{ts}.json"
 
     print(f"\n=======================================================", flush=True)
     print(f"MONITORAMENTO DIÁRIO: [{regiao.upper()}] | JANELA: Últimas 24 horas", flush=True)
