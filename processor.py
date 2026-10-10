@@ -23,6 +23,7 @@ import xml.etree.ElementTree as ET
 from zoneinfo import ZoneInfo
 
 from bs4 import BeautifulSoup
+import googlenewsdecoder
 from playwright.async_api import async_playwright
 from rapidfuzz import fuzz
 import requests
