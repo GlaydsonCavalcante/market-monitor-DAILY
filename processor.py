@@ -23,7 +23,6 @@ import xml.etree.ElementTree as ET
 from zoneinfo import ZoneInfo
 
 from bs4 import BeautifulSoup
-import googlenewsdecoder
 from playwright.async_api import async_playwright
 from rapidfuzz import fuzz
 import requests
@@ -176,7 +175,13 @@ def resolve_publisher_url(google_news_url: str) -> str:
         if extracted and "google.com" not in extracted:
             return extracted
 
-    fn_decode = getattr(googlenewsdecoder, "gnewsdecoder", None) or getattr(googlenewsdecoder, "decoderv1", None)
+    try:
+        import googlenewsdecoder
+        fn_decode = getattr(googlenewsdecoder, "gnewsdecoder", None) or getattr(googlenewsdecoder, "decoderv1", None)
+    except ImportError as e:
+        sys.stderr.write(f"[WARN] Biblioteca googlenewsdecoder inacessivel: {e}\n")
+        return google_news_url
+
     if not fn_decode:
         return google_news_url
 
@@ -186,7 +191,6 @@ def resolve_publisher_url(google_news_url: str) -> str:
         except TypeError:
             return fn_decode(google_news_url, interval=0.1)
 
-    # Executa a resolucao com limite de 3.5s para evitar que bloqueios de rede congelem o pool
     with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
         futuro = executor.submit(_executar_decoder)
         try:
