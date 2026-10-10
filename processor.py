@@ -28,6 +28,7 @@ from playwright.async_api import async_playwright
 from rapidfuzz import fuzz
 import requests
 import trafilatura
+import concurrent.futures
 
 FUSO_BRASILIA = ZoneInfo("America/Sao_Paulo")
 
@@ -161,7 +162,10 @@ def decode_token_offline(token: str) -> Optional[str]:
 
 
 def resolve_publisher_url(google_news_url: str) -> str:
-    """Decodifica URL do Google News combinando rotina offline e biblioteca externa."""
+    """
+    Decodifica URL primária do Google News combinando rotina Base64 offline 
+    e biblioteca externa isolada sob timeout estrito para evitar travamento de worker.
+    """
     if not google_news_url or "news.google.com" not in google_news_url:
         return google_news_url
 
@@ -172,23 +176,33 @@ def resolve_publisher_url(google_news_url: str) -> str:
         if extracted and "google.com" not in extracted:
             return extracted
 
-    # Inspeciona dinamicamente a função exportada (suporte a v0.1.x e v0.2.x)
     fn_decode = getattr(googlenewsdecoder, "gnewsdecoder", None) or getattr(googlenewsdecoder, "decoderv1", None)
-    if fn_decode:
+    if not fn_decode:
+        return google_news_url
+
+    def _executar_decoder():
         try:
-            res = fn_decode(google_news_url)
+            return fn_decode(google_news_url)
         except TypeError:
-            # Fallback para assinaturas legadas que exigiam o parâmetro interval
-            res = fn_decode(google_news_url, interval=0.1)
+            return fn_decode(google_news_url, interval=0.1)
+
+    # Executa a resolucao com limite de 3.5s para evitar que bloqueios de rede congelem o pool
+    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+        futuro = executor.submit(_executar_decoder)
+        try:
+            res = futuro.result(timeout=3.5)
+        except concurrent.futures.TimeoutError:
+            sys.stderr.write(f"[WARN] Timeout na decodificacao RPC da URL: {google_news_url}\n")
+            return google_news_url
         except Exception as exc:
             sys.stderr.write(f"[WARN] Falha decodificacao RPC: {exc}\n")
-            res = None
+            return google_news_url
 
-        decoded = res.get("decoded_url") if isinstance(res, dict) else res
-        if decoded and isinstance(decoded, str) and decoded.startswith("http") and "news.google.com" not in decoded:
-            return decoded
+    decoded = res.get("decoded_url") if isinstance(res, dict) else res
+    if decoded and isinstance(decoded, str) and decoded.startswith("http") and "news.google.com" not in decoded:
+        return decoded
 
-    return google_news_url    
+    return google_news_url
 
 def build_rss_query(base_term: str, excluded_terms: list, preferred_domains: list) -> str:
     """Gera string de busca combinando operadores booleanos e exclusões."""
