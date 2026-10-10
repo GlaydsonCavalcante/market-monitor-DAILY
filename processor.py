@@ -465,14 +465,19 @@ async def _navegar_playwright_item(context, item: dict) -> dict:
                 continue
 
             html_content = await page.content()
-            text = trafilatura.extract(html_content, include_comments=False, include_tables=False, output_format="txt")
-            if not text or len(text.strip()) < TAMANHO_MINIMO_TEXTO:
-                soup = BeautifulSoup(html_content, "html.parser")
-                for tag in soup(["script", "style", "nav", "header", "footer", "aside"]):
-                    tag.decompose()
-                paragraphs = [p.get_text().strip() for p in soup.find_all("p") if len(p.get_text().strip()) > 35]
-                text = "\n\n".join(paragraphs)
 
+            def _parse_conteudo(html: str) -> Optional[str]:
+                extraido = trafilatura.extract(html, include_comments=False, include_tables=False, output_format="txt")
+                if not extraido or len(extraido.strip()) < TAMANHO_MINIMO_TEXTO:
+                    soup = BeautifulSoup(html, "html.parser")
+                    for tag in soup(["script", "style", "nav", "header", "footer", "aside"]):
+                        tag.decompose()
+                    pars = [p.get_text().strip() for p in soup.find_all("p") if len(p.get_text().strip()) > 35]
+                    extraido = "\n\n".join(pars)
+                return extraido.strip() if extraido else None
+
+            text = await asyncio.to_thread(_parse_conteudo, html_content)
+            
             apto, motivo = validar_integridade_factual(titulo, text)
             if apto:
                 item["texto_completo"] = text.strip()
