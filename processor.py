@@ -17,6 +17,7 @@ import re
 import sys
 import time
 from typing import Dict, List, Optional, Tuple
+import types
 import unicodedata
 import urllib.parse
 import xml.etree.ElementTree as ET
