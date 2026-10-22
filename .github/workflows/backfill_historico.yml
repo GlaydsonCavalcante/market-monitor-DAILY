@@ -2,7 +2,7 @@ name: DAILY - Monitoramento de Mercado Multirregional
 
 on:
   schedule:
-    - cron: '30 9 * * *' # 09:30 UTC = 06:30 BRT
+    - cron: '15 9 * * *' # 09:30 UTC = 06:30 BRT
   workflow_dispatch:
 
 env:
