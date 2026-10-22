@@ -544,3 +544,98 @@ def executar_fallback_playwright(itens_bloqueados: list) -> list:
         return loop.run_until_complete(processar_bloqueados_playwright(itens_bloqueados))
     finally:
         loop.close()
+
+
+def cluster_articles_semantico(
+    raw_articles: list,
+    similarity_threshold: float = 0.82,
+    prefixo_id: str = "CLUS",
+    batch_size: int = 256,
+) -> list:
+    """
+    Agrupamento semantico translinguistico com modelo denso multilíngue.
+    Utiliza pesos INT8 ONNX em CPU via FastEmbed, dispensando runtime PyTorch.
+    Mapeia relacoes semanticas cross-lingual (ex: ingles, espanhol, CJK) 
+    atraves de similaridade de cosseno normalizada com complexidade O(N * C).
+    """
+    if not raw_articles:
+        return []
+
+    from fastembed import TextEmbedding
+
+    # 1. Deduplicacao estrita por link para suprimir URLs identicas coletadas em multiplos termos
+    vistos_links = set()
+    artigos_unicos = []
+    for art in raw_articles:
+        lnk = art.get("link", "").strip()
+        if lnk and lnk in vistos_links:
+            continue
+        if lnk:
+            vistos_links.add(lnk)
+        artigos_unicos.append(art)
+
+    total = len(artigos_unicos)
+    if total == 0:
+        return []
+
+    titulos = [a.get("titulo", "").strip() for a in artigos_unicos]
+
+    # 2. Inferencia vetorial local ONNX (modelo 384 dimensoes multilingue)
+    model = TextEmbedding(model_name="sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2")
+    embeddings_gen = model.embed(titulos, batch_size=batch_size)
+    embeddings = np.array(list(embeddings_gen), dtype=np.float32)
+
+    # 3. Normalizacao L2 unitaria para conversao de produto escalar em similaridade de cosseno estrita
+    normas = np.linalg.norm(embeddings, axis=1, keepdims=True)
+    normas[normas == 0.0] = 1.0
+    embeddings = embeddings / normas
+
+    # 4. Agrupamento guloso vetorizado: produto matricial do lider contra itens remanescentes
+    visitados = np.zeros(total, dtype=bool)
+    clusters = []
+
+    for i in range(total):
+        if visitados[i]:
+            continue
+
+        visitados[i] = True
+        vetor_lider = embeddings[i]
+
+        indices_restantes = np.where(~visitados)[0]
+
+        if len(indices_restantes) > 0:
+            sims = np.dot(embeddings[indices_restantes], vetor_lider)
+            matches_sub = np.where(sims >= similarity_threshold)[0]
+            indices_membros = indices_restantes[matches_sub]
+            visitados[indices_membros] = True
+            membros = [artigos_unicos[i]] + [artigos_unicos[idx] for idx in indices_membros]
+        else:
+            membros = [artigos_unicos[i]]
+
+        primary = membros[0]
+        mirrors = [m["link"] for m in membros[1:] if m.get("link") and m["link"] != primary.get("link")]
+
+        clusters.append({
+            "id_cluster": f"{prefixo_id}_{len(clusters) + 1:04d}",
+            "tema": primary.get("tema", "GERAL"),
+            "termo_origem": primary.get("termo_origem", ""),
+            "titulo": primary.get("titulo", ""),
+            "data_noticia": primary.get("data_noticia", ""),
+            "idioma": primary.get("idioma", "pt"),
+            "fonte_utilizada": primary.get("fonte", "Google News"),
+            "url_utilizada": primary.get("link", ""),
+            "url_primaria": primary.get("link", ""),
+            "urls_espelho": mirrors,
+            "urls_espelho_disponiveis": mirrors,
+            "urls_espelho_canonicas": [],
+            "url_canonica_resolvida": None,
+            "status_resolucao": "PENDENTE",
+            "status_extracao": "PENDENTE",
+            "texto_completo": "",
+            "motivo_bloqueio": None,
+            "necessita_extracao_manual": False,
+            "historico_tentativas": [],
+            "vetor_1024": None,
+        })
+
+    return clusters
