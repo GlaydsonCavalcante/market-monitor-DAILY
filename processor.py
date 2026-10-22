@@ -548,7 +548,7 @@ def executar_fallback_playwright(itens_bloqueados: list) -> list:
 
 def cluster_articles_semantico(
     raw_articles: list,
-    similarity_threshold: float = 0.82,
+    similarity_threshold: float = 0.72,
     prefixo_id: str = "CLUS",
     batch_size: int = 256,
 ) -> list:
