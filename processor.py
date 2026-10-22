@@ -41,16 +41,6 @@ if "selectolax.parser" not in sys.modules:
 
 import googlenewsdecoder
 
-# Redireciona o backend obsoleto (Modest) para o backend Lexbor no selectolax
-# Elimina corrupcao de memoria C (munmap_chunk) sob execucao multi-thread
-if "selectolax.parser" not in sys.modules:
-    _mod_compat = types.ModuleType("selectolax.parser")
-    _mod_compat.HTMLParser = selectolax.lexbor.LexborHTMLParser
-    sys.modules["selectolax.parser"] = _mod_compat
-
-import googlenewsdecoder
-import concurrent.futures
-
 FUSO_BRASILIA = ZoneInfo("America/Sao_Paulo")
 
 USER_AGENTS = [
