@@ -10,6 +10,7 @@ Módulo de processamento para o pipeline diário:
 
 import asyncio
 import base64
+import concurrent.futures
 from datetime import datetime
 import os
 import random
@@ -24,11 +25,21 @@ import xml.etree.ElementTree as ET
 from zoneinfo import ZoneInfo
 
 from bs4 import BeautifulSoup
+import numpy as np
 from playwright.async_api import async_playwright
 from rapidfuzz import fuzz
 import requests
 import selectolax.lexbor
 import trafilatura
+
+# Redireciona o backend obsoleto (Modest) para o backend Lexbor no selectolax
+# Elimina corrupcao de memoria C (munmap_chunk) sob execucao multi-thread
+if "selectolax.parser" not in sys.modules:
+    _mod_compat = types.ModuleType("selectolax.parser")
+    _mod_compat.HTMLParser = selectolax.lexbor.LexborHTMLParser
+    sys.modules["selectolax.parser"] = _mod_compat
+
+import googlenewsdecoder
 
 # Redireciona o backend obsoleto (Modest) para o backend Lexbor no selectolax
 # Elimina corrupcao de memoria C (munmap_chunk) sob execucao multi-thread
