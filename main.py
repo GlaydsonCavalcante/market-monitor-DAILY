@@ -68,14 +68,13 @@ def carregar_modulo_config(caminho_ou_shard: str):
 
 
 def coletar_artigos_rss(cfg) -> list:
-    """Varre feeds RSS do Google News para os termos e mercados do modulo de configuracao."""
+    """Varre feeds RSS concorrentemente para todos os termos e mercados do shard."""
     mercados = cfg.MERCADOS_ALVO
     timeout_req = getattr(cfg, "TIMEOUT_REQUISICAO", 6)
     dominios = getattr(cfg, "DOMINIOS_PREFERENCIAIS", [])
-    raw_articles = []
 
+    tarefas = []
     for tema, dict_idiomas in cfg.MONITORAMENTOS.items():
-        print(f">> Coletando tema: {tema}...", flush=True)
         for mercado in mercados:
             gl, hl, lang = mercado["gl"], mercado["hl"], mercado["lang"]
             termos = dict_idiomas.get(lang, [])
@@ -84,14 +83,24 @@ def coletar_artigos_rss(cfg) -> list:
             for termo in termos:
                 query_base = processor.build_rss_query(termo, excluidos, dominios)
                 query_final = f"{query_base} when:1d".strip()
+                tarefas.append((query_final, hl, gl, tema, termo))
 
-                itens = processor.fetch_rss_feed(query_final, hl=hl, gl=gl, timeout=timeout_req)
-                for item in itens:
-                    item["tema"] = tema
-                    item["termo_origem"] = termo
-                    item["pais_emissao"] = gl
-                    item["idioma"] = hl
-                    raw_articles.append(item)
+    raw_articles = []
+
+    def _fetch(tarefa):
+        q, hl, gl, tema, termo = tarefa
+        itens = processor.fetch_rss_feed(q, hl=hl, gl=gl, timeout=timeout_req)
+        for item in itens:
+            item["tema"] = tema
+            item["termo_origem"] = termo
+            item["pais_emissao"] = gl
+            item["idioma"] = hl
+        return itens
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
+        resultados = executor.map(_fetch, tarefas)
+        for lote in resultados:
+            raw_articles.extend(lote)
 
     return raw_articles
 
@@ -325,7 +334,7 @@ def selecionar_clusters_prioritarios(
     for c in clusters:
         tema = c.get("tema", "GERAL")
         total_fontes = 1 + len(c.get("urls_espelho", []))
-        
+
         if total_fontes >= 2:
             clusters_multisource.append(c)
         else:
