@@ -299,25 +299,6 @@ def executar_pipeline_diario(caminho_ou_shard: str) -> None:
     enviar_telegram(regiao, [nome_json], len(raw_articles), len(clusters), len(processed_results), sucessos, bloqueados)
 
 
-if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Monitoramento Diário de Mercado")
-    parser.add_argument("--config", type=str, default=None)
-    parser.add_argument("--shard", type=str, default=None)
-    parser.add_argument("--coletar-apenas", action="store_true", help="Executa apenas a varredura RSS do shard")
-    parser.add_argument("--consolidar-global", action="store_true", help="Consolida todos os shards coletados")
-    args = parser.parse_args()
-
-    if args.consolidar_global:
-        executar_pipeline_global()
-    else:
-        alvo = args.shard if args.shard else args.config
-        if not alvo:
-            raise ValueError("É obrigatório informar --shard, --config ou acionar --consolidar-global.")
-        if args.coletar_apenas:
-            executar_coleta_shard(alvo)
-        else:
-            executar_pipeline_diario(alvo)
-
 def selecionar_clusters_prioritarios(
     clusters: list,
     max_unitarios_por_tema: int = 80
@@ -348,3 +329,26 @@ def selecionar_clusters_prioritarios(
         selecionados.extend(lista_unitarios)
 
     return selecionados
+
+
+
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="Monitoramento Diário de Mercado")
+    parser.add_argument("--config", type=str, default=None)
+    parser.add_argument("--shard", type=str, default=None)
+    parser.add_argument("--coletar-apenas", action="store_true", help="Executa apenas a varredura RSS do shard")
+    parser.add_argument("--consolidar-global", action="store_true", help="Consolida todos os shards coletados")
+    args = parser.parse_args()
+
+    if args.consolidar_global:
+        executar_pipeline_global()
+    else:
+        alvo = args.shard if args.shard else args.config
+        if not alvo:
+            raise ValueError("É obrigatório informar --shard, --config ou acionar --consolidar-global.")
+        if args.coletar_apenas:
+            executar_coleta_shard(alvo)
+        else:
+            executar_pipeline_diario(alvo)
+
