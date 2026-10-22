@@ -139,7 +139,6 @@ jobs:
           python -m pip install --upgrade pip
           pip install --no-cache-dir -r requirements.txt
           playwright install chromium
-          playwright install-deps chromium
 
       - name: Baixar todos os metadados brutos dos shards
         uses: actions/download-artifact@v4
@@ -162,16 +161,16 @@ jobs:
           path: noticias_consolidado_*.json
           retention-days: 7
 
-      - name: Notificar Falha na Consolidacao/Extracao
+      - name: Notificar Falha no Telegram
         if: failure()
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         run: |
           RAW_TOKEN="${TELEGRAM_BOT_TOKEN#bot}"
-          MENSAGEM="🚨 <b>FALHA NA CONSOLIDAÇÃO / EXTRAÇÃO GLOBAL</b>%0A%0A"
-          MENSAGEM+="⚙️ <b>Job:</b> consolidar-e-extrair%0A"
-          MENSAGEM+="🔗 <a href=\"${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}\">Acessar Log no GitHub Actions</a>"
+          MENSAGEM="🚨 <b>FALHA NO MONITORAMENTO DIÁRIO. ACIONE O TIME DE IA & ANALYTICS</b>%0A%0A"
+          MENSAGEM+="⚙️ <b>Etapa:</b> ${{ matrix.shard || 'Consolidacao Global' }}%0A"
+          MENSAGEM+="🔗 <a href=\"${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}\">Ver Detalhes da Execução</a>"
 
           IFS=',' read -ra CHATS <<< "$TELEGRAM_CHAT_ID"
           for CHAT in "${CHATS[@]}"; do
