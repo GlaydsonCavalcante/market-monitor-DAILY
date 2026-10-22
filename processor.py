@@ -11,7 +11,8 @@ Módulo de processamento para o pipeline diário:
 import asyncio
 import base64
 import concurrent.futures
-from datetime import datetime
+from datetime import datetime, timezone
+import email.utils
 import os
 import random
 import re
@@ -215,27 +216,46 @@ def build_rss_query(base_term: str, excluded_terms: list, preferred_domains: lis
 
 
 def fetch_rss_feed(query: str, hl: str, gl: str, timeout: int = 6) -> list:
-    """Extrai feeds do Google News RSS."""
+    """
+    Extrai feeds do Google News RSS aplicando filtro temporal estrito de 36 horas.
+    Elimina matérias re-indexadas pelo Google News que possuem data de publicação fria.
+    """
     encoded_query = urllib.parse.quote(query)
     ceid = f"{hl.upper()}:{gl.upper()}"
     url = f"https://news.google.com/rss/search?q={encoded_query}&hl={hl}&gl={gl}&ceid={ceid}"
     headers = {"User-Agent": random.choice(USER_AGENTS)}
+
     try:
         response = requests.get(url, headers=headers, timeout=timeout)
         if response.status_code != 200:
             return []
         root = ET.fromstring(response.content)
         feed_items = []
+        agora_utc = datetime.now(timezone.utc)
+
         for item in root.findall(".//channel/item"):
+            data_raw = (item.find("pubDate").text or "").strip() if item.find("pubDate") is not None else ""
+
+            # Validação temporal RFC 2822 estrita (janela de 36h)
+            if data_raw:
+                try:
+                    dt_noticia = email.utils.parsedate_to_datetime(data_raw)
+                    idade_horas = (agora_utc - dt_noticia).total_seconds() / 3600.0
+                    # Descarta se tiver mais de 36h ou data futura inconsistente (> 3h à frente)
+                    if idade_horas > 36.0 or idade_horas < -3.0:
+                        continue
+                except (ValueError, TypeError):
+                    pass
+
             feed_items.append({
                 "titulo": (item.find("title").text or "").strip(),
                 "link": (item.find("link").text or "").strip(),
-                "data_noticia": (item.find("pubDate").text or "").strip(),
+                "data_noticia": data_raw,
                 "fonte": (item.find("source").text or "Google News").strip() if item.find("source") is not None else "Google News",
                 "snippet": (item.find("description").text or "").strip(),
             })
         return feed_items
-    except Exception:
+    except (requests.exceptions.RequestException, ET.ParseError):
         return []
 
 
