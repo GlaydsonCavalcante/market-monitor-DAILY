@@ -2,17 +2,18 @@ name: DAILY - Monitoramento de Mercado Multirregional
 
 on:
   schedule:
-    # Execução diária regular às 05:00 (07:00 Horário de Brasília)
+    # Execução diária regular às 05:00 UTC (07:00 Horário de Brasília)
     - cron: '0 5 * * *'
   workflow_dispatch:
 
 env:
   TZ: "America/Sao_Paulo"
 
-jobs: 
-  executar-shard:
+jobs:
+  coletar-rss-shards:
+    name: Coletar RSS [${{ matrix.shard }}]
     runs-on: ubuntu-latest
-    timeout-minutes: 180
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
@@ -32,27 +33,18 @@ jobs:
       - name: Baixar codigo do repositorio
         uses: actions/checkout@v4
 
-      - name: Liberar espaco em disco no Runner
-        run: |
-          sudo rm -rf /usr/share/dotnet
-          sudo rm -rf /usr/local/lib/android
-          sudo rm -rf /opt/ghc
-
       - name: Configurar ambiente Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-          # Removido cache: 'pip' para expurgar o cache legado de 3.3GB do PyTorch
 
-      - name: Instalar dependencias e Navegador Headless
+      - name: Instalar dependencias basicas de coleta
         run: |
           python -m pip install --upgrade pip
-          pip install --no-cache-dir -r requirements.txt rapidfuzz
-          playwright install chromium
-          playwright install-deps chromium
+          pip install --no-cache-dir requests selectolax>=0.3.21 googlenewsdecoder>=0.1.5
           sudo apt-get update && sudo apt-get install -y rclone
 
-      - name: Configurar Rclone em Memoria para Acesso ao Drive (Configuracoes)
+      - name: Configurar Rclone em Memoria para Acesso ao Drive
         env:
           GDRIVE_SA_KEY: ${{ secrets.GDRIVE_SA_KEY }}
           ID_CONFIGS: ${{ secrets.GDRIVE_CONFIG_FOLDER_ID }}
@@ -61,11 +53,9 @@ jobs:
           import os, json, base64
           raw = os.environ.get("GDRIVE_SA_KEY", "").strip()
           try:
-              # Tentativa 1: Trata como JSON direto
               data = json.loads(raw)
           except Exception:
               try:
-                  # Tentativa 2: Trata como Base64
                   decoded = base64.b64decode(raw).decode("utf-8", errors="ignore")
                   data = json.loads(decoded)
               except Exception as exc:
@@ -88,22 +78,67 @@ jobs:
           include_shared_with_me = true
           EOF
 
-      - name: Executar Pipeline Diario do Shard [${{ matrix.shard }}]
+      - name: Executar Varredura RSS do Shard
         env:
           PYTHONUNBUFFERED: "1"
           SHARD_NAME: ${{ matrix.shard }}
-          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-        run: python main.py --shard ${{ matrix.shard }}
+        run: python main.py --shard ${{ matrix.shard }} --coletar-apenas
 
-      - name: Preservar JSON em Artifacts do GitHub
-        if: always()
+      - name: Preservar Raw JSON do Shard
         uses: actions/upload-artifact@v4
         with:
-          name: noticias-${{ matrix.shard }}
-          path: noticias_${{ matrix.shard }}_*.json
-          retention-days: 7
+          name: raw-${{ matrix.shard }}
+          path: raw_${{ matrix.shard }}.json
+          retention-days: 1
 
       - name: Expurgo de Credenciais Temporarias
         if: always()
         run: rm -rf /tmp/gdrive_sa.json ~/.config/rclone/rclone.conf
+
+  consolidar-e-extrair:
+    name: Consolidacao Semantica Global e Extracao
+    needs: coletar-rss-shards
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - name: Baixar codigo do repositorio
+        uses: actions/checkout@v4
+
+      - name: Configurar ambiente Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Cache do Modelo FastEmbed
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/fastembed
+          key: fastembed-paraphrase-multilingual-v1
+
+      - name: Instalar dependencias e Navegador Headless
+        run: |
+          python -m pip install --upgrade pip
+          pip install --no-cache-dir -r requirements.txt
+          playwright install chromium
+          playwright install-deps chromium
+
+      - name: Baixar todos os metadados brutos dos shards
+        uses: actions/download-artifact@v4
+        with:
+          pattern: raw-*
+          merge-multiple: true
+
+      - name: Executar Consolidacao Global e Extracao
+        env:
+          PYTHONUNBUFFERED: "1"
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: python main.py --consolidar-global
+
+      - name: Preservar JSON Consolidado em Artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: noticias-consolidado-diario
+          path: noticias_consolidado_*.json
+          retention-days: 7
