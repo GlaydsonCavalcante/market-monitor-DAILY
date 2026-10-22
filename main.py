@@ -173,8 +173,12 @@ def executar_pipeline_global() -> None:
 
     # Agrupamento Semantico Multilingue (Cross-lingual) via ONNX
     prefixo = f"CLUS_{agora_bsb.strftime('%Y%m%d')}_GLOB"
-    clusters = processor.cluster_articles_semantico(raw_articles, similarity_threshold=0.82, prefixo_id=prefixo)
-    print(f"Clusters unificados globalmente: {len(clusters)}", flush=True)
+    clusters_totais = processor.cluster_articles_semantico(raw_articles, similarity_threshold=0.72, prefixo_id=prefixo)
+    print(f"Clusters unificados globalmente (brutos): {len(clusters_totais)}", flush=True)
+
+    # Filtragem e priorizacao de clusters para extracao
+    clusters = selecionar_clusters_prioritarios(clusters_totais, max_unitarios_por_tema=80)
+    print(f"Clusters selecionados para extracao de texto: {len(clusters)}", flush=True)
 
     # Extracao de Texto - Estagio 1: Fast HTTP Concorrente
     def worker(c):
@@ -304,3 +308,34 @@ if __name__ == "__main__":
             executar_coleta_shard(alvo)
         else:
             executar_pipeline_diario(alvo)
+
+def selecionar_clusters_prioritarios(
+    clusters: list,
+    max_unitarios_por_tema: int = 80
+) -> list:
+    """
+    Filtra clusters consolidados para raspagem e enriquecimento via LLM:
+    1. Retém 100% dos clusters multi-fonte (2 ou mais matérias agregadas).
+    2. Aplica cota máxima sobre clusters de fonte única por tema para mitigar
+       dispersão temática em 'Tendências' e controlar custos de processamento.
+    """
+    clusters_multisource = []
+    unitarios_por_tema = {}
+
+    for c in clusters:
+        tema = c.get("tema", "GERAL")
+        total_fontes = 1 + len(c.get("urls_espelho", []))
+        
+        if total_fontes >= 2:
+            clusters_multisource.append(c)
+        else:
+            if tema not in unitarios_por_tema:
+                unitarios_por_tema[tema] = []
+            if len(unitarios_por_tema[tema]) < max_unitarios_por_tema:
+                unitarios_por_tema[tema].append(c)
+
+    selecionados = list(clusters_multisource)
+    for lista_unitarios in unitarios_por_tema.values():
+        selecionados.extend(lista_unitarios)
+
+    return selecionados
