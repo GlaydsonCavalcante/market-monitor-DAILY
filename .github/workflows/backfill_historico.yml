@@ -2,7 +2,8 @@ name: DAILY - Monitoramento de Mercado Multirregional
 
 on:
   schedule:
-    - cron: '19 9 * * *' # 09:30 UTC = 06:30 BRT
+    # 09:19 UTC = 06:19 Horário de Brasília (minuto ímpar para evitar retenção na fila do GitHub)
+    - cron: '19 9 * * *'
   workflow_dispatch:
 
 env:
