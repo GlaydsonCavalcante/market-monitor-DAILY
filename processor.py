@@ -242,7 +242,7 @@ def fetch_rss_feed(query: str, hl: str, gl: str, timeout: int = 6) -> list:
                     dt_noticia = email.utils.parsedate_to_datetime(data_raw)
                     idade_horas = (agora_utc - dt_noticia).total_seconds() / 3600.0
                     # Descarta se tiver mais de 36h ou data futura inconsistente (> 3h à frente)
-                    if idade_horas > 36.0 or idade_horas < -3.0:
+                    if idade_horas > 180.0 or idade_horas < -3.0:
                         continue
                 except (ValueError, TypeError):
                     pass
