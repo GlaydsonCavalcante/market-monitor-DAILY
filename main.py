@@ -82,7 +82,7 @@ def coletar_artigos_rss(cfg) -> list:
 
             for termo in termos:
                 query_base = processor.build_rss_query(termo, excluidos, dominios)
-                query_final = f"{query_base} when:1d".strip()
+                query_final = f"{query_base} when:7d".strip()
                 tarefas.append((query_final, hl, gl, tema, termo))
 
     raw_articles = []
