@@ -3,7 +3,7 @@ name: DAILY - Monitoramento de Mercado Multirregional
 on:
   schedule:
     # Executa toda segunda-feira às 07:37 UTC (04:37 Horário de Brasília)
-    - cron: '37 7 * * 1'
+    - cron: '37 7 * * 4'
   workflow_dispatch:
 
 env:
