@@ -186,7 +186,7 @@ def executar_pipeline_global() -> None:
     print(f"Clusters unificados globalmente (brutos): {len(clusters_totais)}", flush=True)
 
     # Filtragem e priorizacao de clusters para extracao
-    clusters = selecionar_clusters_prioritarios(clusters_totais, max_unitarios_por_tema=80)
+    clusters = selecionar_clusters_prioritarios(clusters_totais, max_unitarios_por_termo=50)
     print(f"Clusters selecionados para extracao de texto: {len(clusters)}", flush=True)
 
     # Extracao de Texto - Estagio 1: Fast HTTP Concorrente
