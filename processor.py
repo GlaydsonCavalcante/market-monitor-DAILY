@@ -135,8 +135,14 @@ def classificar_url_terminal(url: str) -> Optional[str]:
     return None
 
 
+def _remover_acentos(texto: str) -> str:
+    """Remove marcas diacríticas mantendo caracteres base em ASCII."""
+    nfkd = unicodedata.normalize("NFKD", texto)
+    return "".join(c for c in nfkd if not unicodedata.combining(c))
+
+
 def validar_integridade_factual(titulo: str, texto: Optional[str]) -> Tuple[bool, str]:
-    """Valida volume de texto, assinaturas de bloqueio e obrigatoriedade de 2+ termos do título no corpo."""
+    """Valida volume de texto, assinaturas de bloqueio e sobreposição normalizada título-corpo."""
     if not texto or len(texto.strip()) < TAMANHO_MINIMO_TEXTO:
         return False, "TEXTO_MUITO_CURTO"
 
@@ -144,14 +150,15 @@ def validar_integridade_factual(titulo: str, texto: Optional[str]) -> Tuple[bool
     if REGEX_ANTIBOT.search(amostra):
         return False, "ERRO_SCRAPING_BLOQUEIO_CDN"
 
+    titulo_norm = _remover_acentos(titulo or "").lower()
     tokens_titulo = [
-        t.lower() for t in re.findall(r"\b[a-zA-Z0-9\u00C0-\u00FF]{4,}\b", titulo or "")
-        if t.lower() not in STOPWORDS_TITULO
+        t for t in re.findall(r"\b[a-z0-9]{4,}\b", titulo_norm)
+        if t not in STOPWORDS_TITULO
     ]
 
     if len(tokens_titulo) >= 3:
-        texto_lower = texto.lower()
-        matches = sum(1 for token in tokens_titulo if token in texto_lower)
+        texto_norm = _remover_acentos(texto).lower()
+        matches = sum(1 for token in tokens_titulo if token in texto_norm)
         if matches < 2:
             return False, "SEM_SOBREPOSICAO_TITULO_CORPO"
 
