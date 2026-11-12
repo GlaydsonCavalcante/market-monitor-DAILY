@@ -631,8 +631,10 @@ def cluster_articles_semantico(
         indices_restantes = np.where(~visitados)[0]
 
         if len(indices_restantes) > 0:
+            tema_lider = artigos_unicos[i].get("tema", "GERAL")
+            mesmo_tema = np.array([artigos_unicos[idx].get("tema", "GERAL") == tema_lider for idx in indices_restantes])
             sims = np.dot(embeddings[indices_restantes], vetor_lider)
-            matches_sub = np.where(sims >= similarity_threshold)[0]
+            matches_sub = np.where((sims >= similarity_threshold) & mesmo_tema)[0]
             indices_membros = indices_restantes[matches_sub]
             visitados[indices_membros] = True
             membros = [artigos_unicos[i]] + [artigos_unicos[idx] for idx in indices_membros]
