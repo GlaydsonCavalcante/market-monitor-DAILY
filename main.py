@@ -301,36 +301,36 @@ def executar_pipeline_diario(caminho_ou_shard: str) -> None:
 
 def selecionar_clusters_prioritarios(
     clusters: list,
-    max_unitarios_por_tema: int = 80
+    max_unitarios_por_termo: int = 50
 ) -> list:
     """
     Filtra clusters consolidados para raspagem e enriquecimento via LLM:
     1. Retém 100% dos clusters multi-fonte (2 ou mais matérias agregadas).
-    2. Aplica cota máxima sobre clusters de fonte única por tema para mitigar
-       dispersão temática em 'Tendências' e controlar custos de processamento.
+    2. Aplica cota equilibrada por par (tema, termo_origem) para evitar que
+       um player monopolize o teto do tema em janelas semanais.
     """
     clusters_multisource = []
-    unitarios_por_tema = {}
+    unitarios_por_chave = {}
 
     for c in clusters:
         tema = c.get("tema", "GERAL")
+        termo = c.get("termo_origem", "PADRAO")
+        chave = (tema, termo)
         total_fontes = 1 + len(c.get("urls_espelho", []))
 
         if total_fontes >= 2:
             clusters_multisource.append(c)
         else:
-            if tema not in unitarios_por_tema:
-                unitarios_por_tema[tema] = []
-            if len(unitarios_por_tema[tema]) < max_unitarios_por_tema:
-                unitarios_por_tema[tema].append(c)
+            if chave not in unitarios_por_chave:
+                unitarios_por_chave[chave] = []
+            if len(unitarios_por_chave[chave]) < max_unitarios_por_termo:
+                unitarios_por_chave[chave].append(c)
 
     selecionados = list(clusters_multisource)
-    for lista_unitarios in unitarios_por_tema.values():
+    for lista_unitarios in unitarios_por_chave.values():
         selecionados.extend(lista_unitarios)
 
     return selecionados
-
-
 
 
 if __name__ == "__main__":
