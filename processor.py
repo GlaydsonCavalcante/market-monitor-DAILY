@@ -13,6 +13,7 @@ import base64
 import concurrent.futures
 from datetime import datetime, timezone
 import email.utils
+import gc
 import os
 import random
 import re
@@ -666,5 +667,8 @@ def cluster_articles_semantico(
             "historico_tentativas": [],
             "vetor_1024": None,
         })
+
+    del model
+    gc.collect()
 
     return clusters
