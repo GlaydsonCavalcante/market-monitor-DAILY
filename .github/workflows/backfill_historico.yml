@@ -117,10 +117,6 @@ jobs:
 
   consolidar-e-extrair:
     name: Consolidacao Semantica Global e Extracao
-    env:
-      MALLOC_ARENA_MAX: "2"
-      OMP_NUM_THREADS: "1"
-    run: python main.py --consolidar-global
     needs: coletar-rss-shards
     runs-on: ubuntu-latest
     timeout-minutes: 90
@@ -154,6 +150,8 @@ jobs:
       - name: Executar Consolidacao Global e Extracao
         env:
           PYTHONUNBUFFERED: "1"
+          MALLOC_ARENA_MAX: "2"
+          OMP_NUM_THREADS: "1"
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         run: python main.py --consolidar-global
