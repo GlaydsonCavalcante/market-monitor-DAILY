@@ -305,47 +305,100 @@ def scrape_article_text(url: str, timeout: int = 5) -> Tuple[Optional[str], str,
     return (text.strip() if text else None), "SUCESSO", resp.url
 
 
+# Substituir cluster_articles_rapido (linhas 255-301) por:
+
+REGEX_MARCOS_NUMERICOS = re.compile(
+    r"\b(?:[1-4]\s*[tTqQ]\s*\d{2,4}|[1-4][º°]?\s*tri(?:mestre)?|\d+(?:[.,]\d+)?%?)\b",
+    re.IGNORECASE,
+)
+
+
+def _limpar_titulo_rss(titulo: str) -> str:
+    """Remove o sufixo ' - Veículo' anexado pelo Google News RSS."""
+    if not titulo:
+        return ""
+    partes = titulo.rsplit(" - ", 1)
+    if len(partes) == 2 and len(partes[1].strip()) <= 45:
+        return partes[0].strip()
+    return titulo.strip()
+
+
+def _converter_data_rss(data_str: str) -> Optional[datetime]:
+    """Converte data RFC 2822 ou ISO em datetime UTC."""
+    if not data_str:
+        return None
+    texto = data_str.strip()
+    if re.match(r"^\d{4}-\d{2}-\d{2}", texto):
+        return datetime.fromisoformat(texto[:10]).replace(tzinfo=timezone.utc)
+    dt = email.utils.parsedate_to_datetime(texto)
+    if dt is not None and dt.tzinfo is None:
+        return dt.replace(tzinfo=timezone.utc)
+    return dt
+
+
 def cluster_articles_rapido(
     raw_articles: list,
-    similarity_threshold: float = 80.0,
+    similarity_threshold: float = 92.0,
     prefixo_id: str = "CLUS",
 ) -> list:
-    """Deduplicação de notícias do dia via rapidfuzz."""
+    """
+    Deduplica URLs idênticas e agrupa apenas republicações literais na janela de 24h
+    com cifras e trimestres idênticos, delegando a deduplicação semântica à plataforma.
+    """
     if not raw_articles:
         return []
 
+    vistos_links = set()
+    artigos_unicos = []
+    for art in raw_articles:
+        lnk_norm = art.get("link", "").split("?")[0].strip().rstrip("/").lower()
+        if lnk_norm and lnk_norm in vistos_links:
+            continue
+        if lnk_norm:
+            vistos_links.add(lnk_norm)
+        artigos_unicos.append(art)
+
+    total = len(artigos_unicos)
+    titulos_limpos = [_limpar_titulo_rss(a.get("titulo", "")) for a in artigos_unicos]
+    datas_parsed = [_converter_data_rss(a.get("data_noticia", "")) for a in artigos_unicos]
+    marcos_num = [
+        {m.group(0).lower().replace(" ", "") for m in REGEX_MARCOS_NUMERICOS.finditer(t)}
+        for t in titulos_limpos
+    ]
+
     clusters = []
     visited = set()
-    total = len(raw_articles)
 
     for i in range(total):
         if i in visited:
             continue
-        cluster_members = [raw_articles[i]]
+        cluster_members = [artigos_unicos[i]]
         visited.add(i)
-        tit_i = raw_articles[i]["titulo"]
 
         for j in range(i + 1, total):
             if j in visited:
                 continue
-            tit_j = raw_articles[j]["titulo"]
-            sim = fuzz.token_sort_ratio(tit_i, tit_j)
-            if sim >= similarity_threshold:
-                cluster_members.append(raw_articles[j])
+            if datas_parsed[i] is not None and datas_parsed[j] is not None:
+                if abs((datas_parsed[i] - datas_parsed[j]).total_seconds()) > 86400.0:
+                    continue
+            if marcos_num[i] != marcos_num[j]:
+                continue
+            if fuzz.token_sort_ratio(titulos_limpos[i], titulos_limpos[j]) >= similarity_threshold:
+                cluster_members.append(artigos_unicos[j])
                 visited.add(j)
 
         primary = cluster_members[0]
         mirrors = [m["link"] for m in cluster_members[1:] if m["link"] != primary["link"]]
         clusters.append({
             "id_cluster": f"{prefixo_id}_{len(clusters) + 1:04d}",
-            "tema": primary["tema"],
-            "termo_origem": primary["termo_origem"],
-            "titulo": primary["titulo"],
-            "data_noticia": primary["data_noticia"],
-            "idioma": primary["idioma"],
-            "fonte_utilizada": primary["fonte"],
-            "url_utilizada": primary["link"],
-            "url_primaria": primary["link"],
+            "tema": primary.get("tema", "GERAL"),
+            "termo_origem": primary.get("termo_origem", ""),
+            "titulo": primary.get("titulo", ""),
+            "data_noticia": primary.get("data_noticia", ""),
+            "idioma": primary.get("idioma", "pt"),
+            "fonte_utilizada": primary.get("fonte", "Google News"),
+            "url_utilizada": primary.get("link", ""),
+            "url_primaria": primary.get("link", ""),
             "urls_espelho": mirrors,
             "urls_espelho_disponiveis": mirrors,
             "urls_espelho_canonicas": [],
