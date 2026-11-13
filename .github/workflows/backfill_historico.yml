@@ -117,6 +117,10 @@ jobs:
 
   consolidar-e-extrair:
     name: Consolidacao Semantica Global e Extracao
+    env:
+      MALLOC_ARENA_MAX: "2"
+      OMP_NUM_THREADS: "1"
+    run: python main.py --consolidar-global
     needs: coletar-rss-shards
     runs-on: ubuntu-latest
     timeout-minutes: 90
