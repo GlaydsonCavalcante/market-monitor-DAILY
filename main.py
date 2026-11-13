@@ -192,8 +192,8 @@ def executar_pipeline_global() -> None:
 
     # Agrupamento Semantico Multilingue (Cross-lingual) via ONNX
     prefixo = f"CLUS_{agora_bsb.strftime('%Y%m%d')}_GLOB"
-    clusters_totais = processor.cluster_articles_semantico(raw_articles, similarity_threshold=0.72, prefixo_id=prefixo)
-    print(f"Clusters unificados globalmente (brutos): {len(clusters_totais)}", flush=True)
+    clusters = processor.cluster_articles_rapido(raw_articles, similarity_threshold=92.0, prefixo_id=prefixo)
+    print(f"Clusters consolidados (espelhos literais 24h): {len(clusters)}", flush=True)
 
     # Filtragem e priorizacao de clusters para extracao
     clusters = selecionar_clusters_prioritarios(clusters_totais, max_unitarios_por_termo=50)
@@ -274,7 +274,7 @@ def executar_pipeline_diario(caminho_ou_shard: str) -> None:
         return
 
     prefixo = f"CLUS_{agora_bsb.strftime('%Y%m%d')}_{regiao[:4].upper()}"
-    clusters = processor.cluster_articles_semantico(raw_articles, similarity_threshold=0.82, prefixo_id=prefixo)
+    clusters = processor.cluster_articles_rapido(raw_articles, similarity_threshold=92.0, prefixo_id=prefixo)
 
     def worker(c):
         time.sleep(random.uniform(0.05, 0.2))
