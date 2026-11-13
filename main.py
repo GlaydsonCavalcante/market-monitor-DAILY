@@ -22,6 +22,7 @@ FUSO_BRASILIA = ZoneInfo("America/Sao_Paulo")
 import argparse
 import concurrent.futures
 from datetime import datetime
+import gc
 import glob
 import importlib.util
 import json
@@ -146,6 +147,15 @@ def executar_coleta_shard(caminho_ou_shard: str) -> None:
         json.dump(artigos, f, ensure_ascii=False, indent=2)
 
 
+def _extrair_cluster_worker(cluster: dict) -> dict:
+    """
+    Executa a raspagem HTTP e a validação factual de um cluster em processo isolado.
+    Previne corrupção de ponteiros C (libxml2/lexbor) sob alta concorrência de HTMLs.
+    """
+    time.sleep(random.uniform(0.05, 0.2))
+    return processor.process_cluster_with_fallback(cluster, timeout=6)
+
+
 def executar_pipeline_global() -> None:
     """
     Consolidador Global:
@@ -189,14 +199,11 @@ def executar_pipeline_global() -> None:
     clusters = selecionar_clusters_prioritarios(clusters_totais, max_unitarios_por_termo=50)
     print(f"Clusters selecionados para extracao de texto: {len(clusters)}", flush=True)
 
-    # Extracao de Texto - Estagio 1: Fast HTTP Concorrente
-    def worker(c):
-        time.sleep(random.uniform(0.05, 0.2))
-        return processor.process_cluster_with_fallback(c, timeout=6)
-
+    # Extracao de Texto - Estagio 1: Fast HTTP em Processos Isolados
+    gc.collect()
     processed_results = []
-    with concurrent.futures.ThreadPoolExecutor(max_workers=8) as executor:
-        futuros = {executor.submit(worker, c): c for c in clusters}
+    with concurrent.futures.ProcessPoolExecutor(max_workers=4) as executor:
+        futuros = {executor.submit(_extrair_cluster_worker, c): c for c in clusters}
         for f in concurrent.futures.as_completed(futuros):
             processed_results.append(f.result())
 
