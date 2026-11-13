@@ -1,4 +1,4 @@
-name: DAILY - Monitoramento de Mercado Multirregional
+name: WEEKLY - Monitoramento de Mercado Multirregional
 
 on:
   schedule:
